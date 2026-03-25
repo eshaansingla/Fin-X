@@ -1,0 +1,31 @@
+Generate a comprehensive NSE Signal Card for stock: {symbol}
+
+PRICE & TECHNICAL DATA:
+{price_json}
+
+RECENT NEWS HEADLINES:
+{news_headlines}
+
+Generate a structured analysis card. Respond ONLY with valid JSON:
+{
+  "symbol": "{symbol}",
+  "sentiment": "bullish" | "bearish" | "neutral",
+  "sentiment_score": <0-100, where 0=extremely bearish, 100=extremely bullish>,
+  "sentiment_reason": "One sentence explaining the sentiment score",
+
+  "technical_snapshot": "2-3 sentences. Mention RSI zone, EMA signal, price vs 52-week range. Plain English.",
+
+  "news_impact_score": <0-100, where 0=very negative news, 100=very positive news>,
+  "news_impact_summary": "1-2 sentences summarizing what the news implies for this stock",
+
+  "risk_flags": [
+    "List of specific risk flags as strings. Examples: 'RSI above 70 - potentially overbought',
+     'Earnings announcement due', 'High FII selling pressure', 'Trading near 52-week high'"
+  ],
+
+  "actionable_context": "1-2 sentences with educational context. Use phrases like
+    'Investors monitoring this stock might watch for...' or 'Historically, this pattern...'
+    NEVER say buy or sell. NEVER give price targets.",
+
+  "disclaimer": "For educational purposes only. Not SEBI-registered investment advice."
+}

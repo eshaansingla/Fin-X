@@ -1,0 +1,16 @@
+INFO:     Started server process [31500]
+INFO:     Waiting for application startup.
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Added job "run_radar_job" to job store "default"
+INFO:apscheduler.scheduler:Added job "run_radar_job" to job store "default"
+INFO:apscheduler.scheduler:Added job "prefetch_popular_stocks" to job store "default"
+INFO:apscheduler.scheduler:Scheduler started
+INFO:[Scheduler]:Scheduler started — Opportunity Radar runs every 1h
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+[DB] Initialized successfully
+[FALCON-X] Server ready — API docs at /docs

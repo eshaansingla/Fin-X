@@ -1,0 +1,68 @@
+INFO:     Started server process [21588]
+INFO:     Waiting for application startup.
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Added job "run_radar_job" to job store "default"
+INFO:apscheduler.scheduler:Added job "run_radar_job" to job store "default"
+INFO:apscheduler.scheduler:Added job "prefetch_popular_stocks" to job store "default"
+INFO:apscheduler.scheduler:Scheduler started
+INFO:[Scheduler]:Scheduler started — Opportunity Radar runs every 1h
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:apscheduler.executors.default:Running job "run_radar_job (trigger: date[2026-03-24 14:04:20 IST], next run at: 2026-03-24 14:04:20 IST)" (scheduled at 2026-03-24 14:04:20.736222+05:30)
+INFO:apscheduler.scheduler:Removed job radar_startup
+INFO:[Scheduler]:Radar job started
+INFO:[Scheduler]:Fetched 0 deals from NSE
+INFO:[Scheduler]:Saved 0 new deals to DB
+INFO:[Scheduler]:No new deals — skipping AI processing
+INFO:apscheduler.executors.default:Job "run_radar_job (trigger: date[2026-03-24 14:04:20 IST], next run at: 2026-03-24 14:04:20 IST)" executed successfully
+INFO:apscheduler.scheduler:Removed job prefetch_startup
+INFO:apscheduler.executors.default:Running job "prefetch_popular_stocks (trigger: date[2026-03-24 14:04:40 IST], next run at: 2026-03-24 14:04:40 IST)" (scheduled at 2026-03-24 14:04:40.736729+05:30)
+INFO:[Scheduler]:Pre-fetching signal cards for popular stocks...
+[DB] Initialized successfully
+[FALCON-X] Server ready — API docs at /docs
+[NSE] Session warmed up successfully
+[NSE] Bulk deals fetch error: 404 Client Error: Not Found for url: https://www.nseindia.com/api/bulk-deal-archives?from=24-03-2026&to=24-03-2026
+[NSE] Block deals fetch error: 404 Client Error: Not Found for url: https://www.nseindia.com/api/block-deal-archives?from=24-03-2026&to=24-03-2026
+INFO:     127.0.0.1:52164 - "GET /api/health HTTP/1.1" 200 OK
+ERROR:yfinance:Failed to get ticker 'RELIANCE.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$RELIANCE.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$RELIANCE.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: RELIANCE
+ERROR:yfinance:Failed to get ticker 'TCS.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$TCS.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$TCS.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: TCS
+ERROR:yfinance:Failed to get ticker 'INFY.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$INFY.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$INFY.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: INFY
+ERROR:yfinance:Failed to get ticker 'HDFCBANK.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$HDFCBANK.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$HDFCBANK.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: HDFCBANK
+ERROR:yfinance:Failed to get ticker 'ICICIBANK.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$ICICIBANK.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$ICICIBANK.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: ICICIBANK
+ERROR:yfinance:Failed to get ticker 'TATAMOTORS.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$TATAMOTORS.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$TATAMOTORS.NS: possibly delisted; no price data found  (period=1mo)
+ERROR:yfinance:Failed to get ticker 'WIPRO.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$WIPRO.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$WIPRO.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: WIPRO
+ERROR:yfinance:Failed to get ticker 'BAJFINANCE.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$BAJFINANCE.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$BAJFINANCE.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: BAJFINANCE
+ERROR:yfinance:Failed to get ticker 'SUNPHARMA.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$SUNPHARMA.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$SUNPHARMA.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: SUNPHARMA
+ERROR:yfinance:Failed to get ticker 'ITC.NS' reason: Expecting value: line 1 column 1 (char 0)
+ERROR:yfinance:$ITC.NS: possibly delisted; no price data found  (period=3mo)
+ERROR:yfinance:$ITC.NS: possibly delisted; no price data found  (period=1mo)
+INFO:[Scheduler]:Pre-fetched card: ITC
+INFO:apscheduler.executors.default:Job "prefetch_popular_stocks (trigger: date[2026-03-24 14:04:40 IST], next run at: 2026-03-24 14:04:40 IST)" executed successfully

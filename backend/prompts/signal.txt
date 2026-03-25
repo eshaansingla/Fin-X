@@ -1,0 +1,24 @@
+Analyze this NSE bulk/block deal and explain what it means for a retail investor.
+
+BULK DEAL DATA:
+{deal_json}
+
+CURRENT STOCK PRICE CONTEXT:
+{price_json}
+
+INSTRUCTIONS:
+1. Identify who traded (institution, mutual fund, FII, promoter, etc.)
+2. Explain the significance of the trade size relative to normal volume
+3. Combine with the technical indicators to form a context-aware assessment
+4. Note any risk factors (high RSI = potentially overbought, etc.)
+5. Keep explanation to 3 sentences maximum - simple enough for a beginner
+
+Respond ONLY with a valid JSON object (no markdown, no prose outside JSON):
+{
+  "explanation": "3-sentence plain English explanation for a retail investor",
+  "signal_type": "bullish" | "bearish" | "neutral",
+  "risk_level": "high" | "medium" | "low",
+  "confidence": <integer 0-100>,
+  "key_observation": "One sentence - the single most important thing to notice",
+  "disclaimer": "For educational purposes only. Not SEBI-registered investment advice."
+}

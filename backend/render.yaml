@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: falcon-x-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        value: data/falcon.db
+      - key: CORS_ORIGINS
+        sync: false
+      - key: RADAR_INTERVAL_HOURS
+        value: "1"
+      - key: MAX_GPT_TOKENS
+        value: "1000"

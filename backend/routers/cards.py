@@ -1,0 +1,252 @@
+# backend/routers/cards.py
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from datetime import datetime, timedelta
+import json
+from database import db_fetchone, db_execute
+from services.indicators import get_stock_data
+from services.news_fetcher import get_stock_news
+from services.gpt import generate_signal_card
+from services.nse_service import get_quote, get_historical
+from services.symbol_resolver import normalize_symbol
+
+router = APIRouter()
+
+_MAX_SYMBOL_LEN = 10
+
+_FALLBACK_SNAPSHOT = 'Technical analysis unavailable.'
+
+
+def _rule_based_snapshot(stock_data: dict) -> str:
+    """Generate a data-driven technical snapshot from available indicators."""
+    parts = []
+
+    rsi        = stock_data.get('rsi')
+    ema_signal = stock_data.get('ema_signal', '')
+    rsi_zone   = stock_data.get('rsi_zone', '')
+    price      = stock_data.get('current_price')
+    prev_close = stock_data.get('prev_close')
+    high_52w   = stock_data.get('high_52w')
+    low_52w    = stock_data.get('low_52w')
+    volume     = stock_data.get('volume')
+    avg_vol    = stock_data.get('avg_volume')
+
+    # RSI interpretation
+    if rsi is not None:
+        rsi_val = round(float(rsi), 1)
+        if rsi_val >= 70:
+            parts.append(f'RSI at {rsi_val} signals overbought territory — momentum may be exhausted.')
+        elif rsi_val <= 30:
+            parts.append(f'RSI at {rsi_val} signals oversold conditions — potential mean-reversion candidate.')
+        elif rsi_val >= 55:
+            parts.append(f'RSI at {rsi_val} reflects positive momentum with room to run.')
+        elif rsi_val <= 45:
+            parts.append(f'RSI at {rsi_val} reflects weak momentum; watch for further softening.')
+        else:
+            parts.append(f'RSI at {rsi_val} is in neutral territory, showing no extreme bias.')
+
+    # EMA signal
+    if ema_signal:
+        sig = ema_signal.lower().replace('_', ' ')
+        if 'bullish' in sig or 'crossover' in sig:
+            parts.append('EMA-20 has crossed above EMA-50, signalling a short-term bullish crossover.')
+        elif 'bearish' in sig:
+            parts.append('EMA-20 is below EMA-50, indicating a bearish short-term trend.')
+        else:
+            parts.append(f'EMA trend is {sig}; no strong directional crossover currently.')
+
+    # 52-week position
+    if price is not None and high_52w is not None and low_52w is not None:
+        try:
+            p, h, l = float(price), float(high_52w), float(low_52w)
+            rng = h - l
+            if rng > 0:
+                pos = (p - l) / rng * 100
+                if pos >= 80:
+                    parts.append(f'Price is near its 52-week high (₹{h:,.2f}), trading in the upper {100 - round(pos)}% of the range.')
+                elif pos <= 20:
+                    parts.append(f'Price is near its 52-week low (₹{l:,.2f}), trading in the lower {round(pos)}% of the range.')
+                else:
+                    parts.append(f'Price is at {round(pos)}% of its 52-week range (₹{l:,.2f}–₹{h:,.2f}).')
+        except (TypeError, ValueError):
+            pass
+
+    # Day move
+    if price is not None and prev_close is not None:
+        try:
+            chg_pct = ((float(price) - float(prev_close)) / float(prev_close)) * 100
+            direction = 'up' if chg_pct >= 0 else 'down'
+            parts.append(f'Stock is {direction} {abs(chg_pct):.2f}% from previous close of ₹{float(prev_close):,.2f}.')
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    # Volume vs average
+    if volume is not None and avg_vol is not None:
+        try:
+            v, av = float(volume), float(avg_vol)
+            if av > 0:
+                ratio = v / av
+                if ratio >= 1.5:
+                    parts.append(f'Volume is {ratio:.1f}x average — elevated activity suggests institutional interest.')
+                elif ratio <= 0.5:
+                    parts.append(f'Volume is below average ({ratio:.1f}x), suggesting low conviction in the move.')
+        except (TypeError, ValueError):
+            pass
+
+    if not parts:
+        return 'Insufficient data for rule-based technical analysis. Please check NSE directly.'
+
+    return ' '.join(parts)
+
+
+@router.get('/card/{symbol}')
+def get_signal_card(symbol: str, force_refresh: bool = False):
+    """
+    Returns an AI-generated NSE Signal Card for a given stock ticker.
+    Cache TTL: 15 minutes. Use force_refresh=true to bypass cache.
+    """
+    # Normalize + validate symbol
+    symbol = normalize_symbol(symbol)
+    if not symbol or len(symbol) > _MAX_SYMBOL_LEN:
+        return JSONResponse(
+            status_code=400,
+            content={
+                'success': False,
+                'data': None,
+                'error': f'Invalid symbol. Must be 1-{_MAX_SYMBOL_LEN} characters.',
+            },
+        )
+
+    # ── Cache check ──────────────────────────────────────────
+    if not force_refresh:
+        try:
+            cached = db_fetchone(
+                'SELECT card_json, expires_at FROM card_cache WHERE symbol=?',
+                (symbol,)
+            )
+            if cached and cached['expires_at'] > datetime.utcnow().isoformat():
+                return {
+                    'success': True,
+                    'data': {'cached': True, 'card': json.loads(cached['card_json'])},
+                    'error': None,
+                }
+        except Exception as e:
+            print(f'[Cards] Cache read error for {symbol}: {e}')
+
+    # ── Step 1: yfinance — indicators + 30-day history ───────
+    stock_data: dict = {'symbol': symbol}
+    try:
+        yf_result = get_stock_data(symbol)
+        if 'error' not in yf_result:
+            stock_data = yf_result
+        else:
+            print(f'[Cards] yfinance miss for {symbol}: {yf_result.get("error")} — continuing with NSE data')
+    except Exception as e:
+        print(f'[Cards] yfinance exception for {symbol}: {e}')
+
+    # ── Step 2: NSE live quote overlay ───────────────────────
+    try:
+        nse_quote = get_quote(symbol)
+        if nse_quote:
+            for src_key, dst_key in [
+                ('price',          'current_price'),
+                ('percent_change', 'change_pct'),
+                ('open',           'open'),
+                ('high',           'high'),
+                ('low',            'low'),
+                ('prev_close',     'prev_close'),
+                ('volume',         'volume'),
+            ]:
+                if nse_quote.get(src_key) is not None:
+                    stock_data[dst_key] = nse_quote[src_key]
+    except Exception as e:
+        print(f'[Cards] NSE quote overlay failed for {symbol}: {e}')
+
+    # ── Guard: need at least a price ─────────────────────────
+    if not stock_data.get('current_price'):
+        return JSONResponse(
+            status_code=404,
+            content={
+                'success': False,
+                'data': None,
+                'error': f'Data temporarily unavailable for {symbol}. Please try again shortly.',
+            },
+        )
+
+    # ── Step 3: News + AI card generation ────────────────────
+    news = []
+    try:
+        news = get_stock_news(symbol)
+        card = generate_signal_card(symbol, stock_data, news)
+    except Exception as e:
+        print(f'[Cards] Generation failed for {symbol}: {e}')
+        # Return partial card with raw data even if AI fails
+        card = {
+            'symbol':              symbol,
+            'sentiment':           'neutral',
+            'sentiment_score':     50,
+            'sentiment_reason':    'Analysis temporarily unavailable.',
+            'technical_snapshot':  'Technical analysis unavailable.',
+            'news_impact_score':   50,
+            'news_impact_summary': 'News data unavailable.',
+            'risk_flags':          [],
+            'actionable_context':  'Please check NSE and ET Markets directly.',
+            'disclaimer':          'For educational purposes only. Not SEBI-registered investment advice.',
+        }
+        news = []
+
+    # ── Step 3b: Rule-based snapshot fallback ────────────────
+    if not card.get('technical_snapshot') or card.get('technical_snapshot') == _FALLBACK_SNAPSHOT:
+        card['technical_snapshot'] = _rule_based_snapshot(stock_data)
+
+    # ── Step 4: Enrich card with all data fields ──────────────
+    card['symbol']        = symbol
+    card['current_price'] = stock_data.get('current_price')
+    card['change_pct']    = stock_data.get('change_pct')
+    # OHLC — from NSE overlay stored in stock_data
+    card['open']          = stock_data.get('open')
+    card['high']          = stock_data.get('high')
+    card['low']           = stock_data.get('low')
+    card['prev_close']    = stock_data.get('prev_close')
+    card['volume']        = stock_data.get('volume')
+    # Technical indicators
+    card['rsi']           = stock_data.get('rsi')
+    card['ema_signal']    = stock_data.get('ema_signal')
+    card['rsi_zone']      = stock_data.get('rsi_zone')
+    # 30-day price history for mini chart
+    card['price_30d']     = stock_data.get('price_30d', [])
+    card['dates_30d']     = stock_data.get('dates_30d', [])
+    # News
+    card['news']          = [
+        {'headline': n['headline'], 'source': n['source'], 'url': n.get('url', '')}
+        for n in news[:5]
+    ]
+
+    # ── Step 5: Build trend datasets for chart tabs ───────────
+    dates  = stock_data.get('dates_30d', [])
+    prices = stock_data.get('price_30d', [])
+    trends = {
+        '1m': [{'time': d, 'price': p} for d, p in zip(dates, prices)],
+        '1w': [{'time': d, 'price': p} for d, p in zip(dates[-7:],  prices[-7:])],
+    }
+    # 1D: try intraday — fall back to last 5 daily points
+    try:
+        intraday = get_historical(symbol, '1d')
+        trends['1d'] = intraday if len(intraday) >= 2 else [
+            {'time': d, 'price': p} for d, p in zip(dates[-5:], prices[-5:])
+        ]
+    except Exception:
+        trends['1d'] = [{'time': d, 'price': p} for d, p in zip(dates[-5:], prices[-5:])]
+    card['trends'] = trends
+
+    # ── Save to cache (15-minute TTL) ─────────────────────────
+    try:
+        expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+        db_execute(
+            'INSERT OR REPLACE INTO card_cache (symbol, card_json, expires_at) VALUES (?,?,?)',
+            (symbol, json.dumps(card), expires)
+        )
+    except Exception as e:
+        print(f'[Cards] Cache write error for {symbol}: {e}')
+
+    return {'success': True, 'data': {'cached': False, 'card': card}, 'error': None}
