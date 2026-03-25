@@ -151,13 +151,30 @@ def refresh_live_quotes():
     Runs every 10 seconds via APScheduler. No-op outside market hours.
     Parallel fetch (ThreadPoolExecutor in get_bulk_quotes) keeps this fast.
     max_instances=1 prevents overlapping runs if NSE is slow.
+    Also warms the intraday cache so /market/live and /market/price
+    respond instantly (< 10 ms) for all popular symbols.
     """
     try:
         from services.market_hours import is_market_open
         if not is_market_open():
             return   # no-op outside market hours
-        from services.nse_service import get_bulk_quotes
+        from services.nse_service import get_bulk_quotes, get_historical
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Warm quote cache (parallel across all 50 symbols)
         get_bulk_quotes(_LIVE_SYMBOLS)
+
+        # Warm intraday cache for the 10 most popular symbols (background)
+        def _warm_intraday(sym):
+            try:
+                get_historical(sym, '1d')
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            for sym in _LIVE_SYMBOLS[:10]:
+                ex.submit(_warm_intraday, sym)
+
         logger.debug(f'[LiveQuotes] Cache warmed for {len(_LIVE_SYMBOLS)} symbols')
     except Exception as e:
         logger.warning(f'[LiveQuotes] Refresh error: {e}')

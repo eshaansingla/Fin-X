@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import db_fetchone, db_execute
 from services.indicators import get_stock_data
 from services.news_fetcher import get_stock_news
@@ -13,7 +14,6 @@ from services.symbol_resolver import normalize_symbol
 router = APIRouter()
 
 _MAX_SYMBOL_LEN = 10
-
 _FALLBACK_SNAPSHOT = 'Technical analysis unavailable.'
 
 
@@ -23,7 +23,6 @@ def _rule_based_snapshot(stock_data: dict) -> str:
 
     rsi        = stock_data.get('rsi')
     ema_signal = stock_data.get('ema_signal', '')
-    rsi_zone   = stock_data.get('rsi_zone', '')
     price      = stock_data.get('current_price')
     prev_close = stock_data.get('prev_close')
     high_52w   = stock_data.get('high_52w')
@@ -31,7 +30,6 @@ def _rule_based_snapshot(stock_data: dict) -> str:
     volume     = stock_data.get('volume')
     avg_vol    = stock_data.get('avg_volume')
 
-    # RSI interpretation
     if rsi is not None:
         rsi_val = round(float(rsi), 1)
         if rsi_val >= 70:
@@ -45,7 +43,6 @@ def _rule_based_snapshot(stock_data: dict) -> str:
         else:
             parts.append(f'RSI at {rsi_val} is in neutral territory, showing no extreme bias.')
 
-    # EMA signal
     if ema_signal:
         sig = ema_signal.lower().replace('_', ' ')
         if 'bullish' in sig or 'crossover' in sig:
@@ -55,7 +52,6 @@ def _rule_based_snapshot(stock_data: dict) -> str:
         else:
             parts.append(f'EMA trend is {sig}; no strong directional crossover currently.')
 
-    # 52-week position
     if price is not None and high_52w is not None and low_52w is not None:
         try:
             p, h, l = float(price), float(high_52w), float(low_52w)
@@ -71,7 +67,6 @@ def _rule_based_snapshot(stock_data: dict) -> str:
         except (TypeError, ValueError):
             pass
 
-    # Day move
     if price is not None and prev_close is not None:
         try:
             chg_pct = ((float(price) - float(prev_close)) / float(prev_close)) * 100
@@ -80,7 +75,6 @@ def _rule_based_snapshot(stock_data: dict) -> str:
         except (TypeError, ValueError, ZeroDivisionError):
             pass
 
-    # Volume vs average
     if volume is not None and avg_vol is not None:
         try:
             v, av = float(volume), float(avg_vol)
@@ -95,8 +89,39 @@ def _rule_based_snapshot(stock_data: dict) -> str:
 
     if not parts:
         return 'Insufficient data for rule-based technical analysis. Please check NSE directly.'
-
     return ' '.join(parts)
+
+
+# ── Parallel fetch helpers ────────────────────────────────────
+def _fetch_yfinance(symbol: str) -> dict:
+    try:
+        result = get_stock_data(symbol)
+        return result if 'error' not in result else {'symbol': symbol}
+    except Exception as e:
+        print(f'[Cards] yfinance error for {symbol}: {e}')
+        return {'symbol': symbol}
+
+def _fetch_nse_quote(symbol: str) -> dict:
+    try:
+        q = get_quote(symbol)
+        return q or {}
+    except Exception as e:
+        print(f'[Cards] NSE quote error for {symbol}: {e}')
+        return {}
+
+def _fetch_news(symbol: str) -> list:
+    try:
+        return get_stock_news(symbol) or []
+    except Exception as e:
+        print(f'[Cards] News error for {symbol}: {e}')
+        return []
+
+def _fetch_intraday(symbol: str) -> list:
+    try:
+        return get_historical(symbol, '1d') or []
+    except Exception as e:
+        print(f'[Cards] Intraday error for {symbol}: {e}')
+        return []
 
 
 @router.get('/card/{symbol}')
@@ -104,8 +129,8 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
     """
     Returns an AI-generated NSE Signal Card for a given stock ticker.
     Cache TTL: 15 minutes. Use force_refresh=true to bypass cache.
+    All data fetches (yfinance, NSE quote, news, intraday) run in parallel.
     """
-    # Normalize + validate symbol
     symbol = normalize_symbol(symbol)
     if not symbol or len(symbol) > _MAX_SYMBOL_LEN:
         return JSONResponse(
@@ -133,34 +158,54 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
         except Exception as e:
             print(f'[Cards] Cache read error for {symbol}: {e}')
 
-    # ── Step 1: yfinance — indicators + 30-day history ───────
-    stock_data: dict = {'symbol': symbol}
-    try:
-        yf_result = get_stock_data(symbol)
-        if 'error' not in yf_result:
-            stock_data = yf_result
-        else:
-            print(f'[Cards] yfinance miss for {symbol}: {yf_result.get("error")} — continuing with NSE data')
-    except Exception as e:
-        print(f'[Cards] yfinance exception for {symbol}: {e}')
+    # ── Parallel fetch: yfinance + NSE quote + news + intraday ─
+    # All 4 sources run concurrently — reduces wall time from ~sum to ~max
+    stock_data   = {'symbol': symbol}
+    nse_quote    = {}
+    news         = []
+    intraday     = []
 
-    # ── Step 2: NSE live quote overlay ───────────────────────
-    try:
-        nse_quote = get_quote(symbol)
-        if nse_quote:
-            for src_key, dst_key in [
-                ('price',          'current_price'),
-                ('percent_change', 'change_pct'),
-                ('open',           'open'),
-                ('high',           'high'),
-                ('low',            'low'),
-                ('prev_close',     'prev_close'),
-                ('volume',         'volume'),
-            ]:
-                if nse_quote.get(src_key) is not None:
-                    stock_data[dst_key] = nse_quote[src_key]
-    except Exception as e:
-        print(f'[Cards] NSE quote overlay failed for {symbol}: {e}')
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_yf       = ex.submit(_fetch_yfinance,  symbol)
+        f_quote    = ex.submit(_fetch_nse_quote, symbol)
+        f_news     = ex.submit(_fetch_news,      symbol)
+        f_intraday = ex.submit(_fetch_intraday,  symbol)
+
+        # Collect each independently — one slow/failed source doesn't block others
+        try:
+            stock_data = f_yf.result(timeout=15)
+        except Exception as e:
+            print(f'[Cards] yfinance timeout/error for {symbol}: {e}')
+            stock_data = {'symbol': symbol}
+        try:
+            nse_quote  = f_quote.result(timeout=10)
+        except Exception as e:
+            print(f'[Cards] NSE quote timeout/error for {symbol}: {e}')
+            nse_quote = {}
+        try:
+            news       = f_news.result(timeout=10)
+        except Exception as e:
+            print(f'[Cards] News timeout/error for {symbol}: {e}')
+            news = []
+        try:
+            intraday   = f_intraday.result(timeout=10)
+        except Exception as e:
+            print(f'[Cards] Intraday timeout/error for {symbol}: {e}')
+            intraday = []
+
+    # ── Merge NSE live quote over yfinance data ───────────────
+    if nse_quote:
+        for src_key, dst_key in [
+            ('price',          'current_price'),
+            ('percent_change', 'change_pct'),
+            ('open',           'open'),
+            ('high',           'high'),
+            ('low',            'low'),
+            ('prev_close',     'prev_close'),
+            ('volume',         'volume'),
+        ]:
+            if nse_quote.get(src_key) is not None:
+                stock_data[dst_key] = nse_quote[src_key]
 
     # ── Guard: need at least a price ─────────────────────────
     if not stock_data.get('current_price'):
@@ -173,14 +218,11 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
             },
         )
 
-    # ── Step 3: News + AI card generation ────────────────────
-    news = []
+    # ── AI card generation ────────────────────────────────────
     try:
-        news = get_stock_news(symbol)
         card = generate_signal_card(symbol, stock_data, news)
     except Exception as e:
         print(f'[Cards] Generation failed for {symbol}: {e}')
-        # Return partial card with raw data even if AI fails
         card = {
             'symbol':              symbol,
             'sentiment':           'neutral',
@@ -195,51 +237,42 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
         }
         news = []
 
-    # ── Step 3b: Rule-based snapshot fallback ────────────────
+    # ── Rule-based snapshot fallback ─────────────────────────
     if not card.get('technical_snapshot') or card.get('technical_snapshot') == _FALLBACK_SNAPSHOT:
         card['technical_snapshot'] = _rule_based_snapshot(stock_data)
 
-    # ── Step 4: Enrich card with all data fields ──────────────
+    # ── Enrich card ───────────────────────────────────────────
     card['symbol']        = symbol
     card['current_price'] = stock_data.get('current_price')
     card['change_pct']    = stock_data.get('change_pct')
-    # OHLC — from NSE overlay stored in stock_data
     card['open']          = stock_data.get('open')
     card['high']          = stock_data.get('high')
     card['low']           = stock_data.get('low')
     card['prev_close']    = stock_data.get('prev_close')
     card['volume']        = stock_data.get('volume')
-    # Technical indicators
     card['rsi']           = stock_data.get('rsi')
     card['ema_signal']    = stock_data.get('ema_signal')
     card['rsi_zone']      = stock_data.get('rsi_zone')
-    # 30-day price history for mini chart
     card['price_30d']     = stock_data.get('price_30d', [])
     card['dates_30d']     = stock_data.get('dates_30d', [])
-    # News
     card['news']          = [
         {'headline': n['headline'], 'source': n['source'], 'url': n.get('url', '')}
         for n in news[:5]
     ]
 
-    # ── Step 5: Build trend datasets for chart tabs ───────────
+    # ── Trend datasets ────────────────────────────────────────
     dates  = stock_data.get('dates_30d', [])
     prices = stock_data.get('price_30d', [])
     trends = {
         '1m': [{'time': d, 'price': p} for d, p in zip(dates, prices)],
-        '1w': [{'time': d, 'price': p} for d, p in zip(dates[-7:],  prices[-7:])],
-    }
-    # 1D: try intraday — fall back to last 5 daily points
-    try:
-        intraday = get_historical(symbol, '1d')
-        trends['1d'] = intraday if len(intraday) >= 2 else [
+        '1w': [{'time': d, 'price': p} for d, p in zip(dates[-7:], prices[-7:])],
+        '1d': intraday if len(intraday) >= 2 else [
             {'time': d, 'price': p} for d, p in zip(dates[-5:], prices[-5:])
-        ]
-    except Exception:
-        trends['1d'] = [{'time': d, 'price': p} for d, p in zip(dates[-5:], prices[-5:])]
+        ],
+    }
     card['trends'] = trends
 
-    # ── Save to cache (15-minute TTL) ─────────────────────────
+    # ── Save to cache (15-min TTL) ────────────────────────────
     try:
         expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
         db_execute(
