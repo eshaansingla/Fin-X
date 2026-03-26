@@ -84,6 +84,7 @@ def get_signals(
                             'risk_level':      rb.get('risk_level',      sig.get('risk_level',  'medium')),
                             'confidence':      rb.get('confidence',      sig.get('confidence',   50)),
                             'key_observation': rb.get('key_observation', sig.get('key_observation', '')),
+                            'ai_provider':     rb.get('ai_provider',     sig.get('ai_provider', 'rule_based')),
                         })
             except Exception as e:
                 print(f'[Signals] Stale explanation fix failed: {e}')
@@ -147,8 +148,8 @@ def manual_refresh():
                 db_execute(
                     '''INSERT INTO signals
                        (deal_id, symbol, explanation, signal_type, risk_level,
-                        confidence, key_observation, disclaimer)
-                       VALUES (?,?,?,?,?,?,?,?)''',
+                        confidence, key_observation, disclaimer, ai_provider)
+                       VALUES (?,?,?,?,?,?,?,?,?)''',
                     (
                         deal['id'],
                         deal['symbol'],
@@ -157,7 +158,8 @@ def manual_refresh():
                         signal.get('risk_level',      'medium'),
                         signal.get('confidence',       50),
                         signal.get('key_observation', ''),
-                        signal.get('disclaimer', 'For educational purposes only. Not SEBI-registered investment advice.'),
+                        signal.get('disclaimer', 'For educational purposes only. Not financial advice.'),
+                        signal.get('ai_provider'),
                     )
                 )
                 generated += 1

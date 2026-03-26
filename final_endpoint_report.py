@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FALCON-X API - FINAL ENDPOINT PASS REPORT
+FIN-X API - FINAL ENDPOINT PASS REPORT
 """
 
 import requests
@@ -9,7 +9,7 @@ from datetime import datetime
 BASE_URL = 'http://localhost:8000/api'
 
 print('\n' + '#'*80)
-print('# FALCON-X API - COMPLETE ENDPOINT PASS')
+print('# FIN-X API - COMPLETE ENDPOINT PASS')
 print('#'*80)
 print(f'Timestamp: {datetime.utcnow().isoformat()}')
 print(f'Report Generated: ENDPOINT VERIFICATION COMPLETE\n')

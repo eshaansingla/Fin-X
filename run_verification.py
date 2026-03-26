@@ -5,10 +5,10 @@ import json
 import time
 import subprocess
 
-print("--- FALCON-X VERIFICATION ---")
+print("--- FIN-X VERIFICATION ---")
 
 # 1. Verify Database Integrity
-db_path = "backend/data/falcon.db"
+db_path = "backend/data/finx.db"
 print(f"Checking DB: {db_path}")
 if not os.path.exists(db_path):
     print("Database file doesn't exist yet, we can create it or it will be created by FastAPI.")

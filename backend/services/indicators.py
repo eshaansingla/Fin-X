@@ -1,21 +1,7 @@
-import pandas as pd
-import yfinance as yf
+import math
+import requests
 
-try:
-    import pandas_ta as ta
-    USE_PANDAS_TA = True
-except ImportError:
-    USE_PANDAS_TA = False
-    ta = None
-
-try:
-    from ta.momentum import RSIIndicator
-    from ta.trend import EMAIndicator, SMAIndicator
-
-    USE_TA_LIB = True
-except ImportError:
-    USE_TA_LIB = False
-    print("[Indicators] ta lib not available - using manual RSI calculation")
+from services.price_fetcher import fetch_close_series, fetch_current_price
 
 POPULAR_STOCKS = [
     "RELIANCE.NS",
@@ -43,18 +29,50 @@ def add_ns_suffix(symbol: str) -> str:
     return symbol if (symbol.endswith(".NS") or symbol.endswith(".BO")) else f"{symbol}.NS"
 
 
-def compute_rsi_manual(close: pd.Series, length: int = 14) -> pd.Series:
-    delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(com=length - 1, min_periods=length).mean()
-    avg_loss = loss.ewm(com=length - 1, min_periods=length).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+def compute_rsi_manual(closes: list[float], length: int = 14) -> list[float | None]:
+    """
+    RSI (Wilder) computed from close prices.
+    Returns a list aligned to `closes` where the first `length` values are `None`.
+    """
+    if not closes or len(closes) < length + 1:
+        return [None] * len(closes or [])
+
+    rsi: list[float | None] = [None] * len(closes)
+
+    gains: list[float] = []
+    losses: list[float] = []
+    for i in range(1, length + 1):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+
+    avg_gain = sum(gains) / length
+    avg_loss = sum(losses) / length
+
+    def _rsi(avg_g: float, avg_l: float) -> float:
+        if avg_l == 0:
+            return 100.0
+        rs = avg_g / avg_l
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    # RSI value starts at index `length`
+    rsi[length] = _rsi(avg_gain, avg_loss)
+
+    for i in range(length + 1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gain = max(diff, 0.0)
+        loss = max(-diff, 0.0)
+
+        # Wilder smoothing
+        avg_gain = ((avg_gain * (length - 1)) + gain) / length
+        avg_loss = ((avg_loss * (length - 1)) + loss) / length
+        rsi[i] = _rsi(avg_gain, avg_loss)
+
+    return rsi
 
 
-def interpret_rsi(rsi_val) -> str:
-    if rsi_val is None or (hasattr(rsi_val, "__float__") and pd.isna(rsi_val)):
+def interpret_rsi(rsi_val: float | None) -> str:
+    if rsi_val is None:
         return "unknown"
     v = float(rsi_val)
     if v >= 70:
@@ -68,12 +86,38 @@ def interpret_rsi(rsi_val) -> str:
     return "neutral"
 
 
+def compute_ema(closes: list[float], span: int) -> list[float]:
+    """Exponential moving average over a list of closes."""
+    if not closes:
+        return []
+    alpha = 2.0 / (span + 1.0)
+    ema: list[float] = []
+    prev = closes[0]
+    ema.append(prev)
+    for i in range(1, len(closes)):
+        cur = closes[i]
+        nxt = (cur * alpha) + (prev * (1.0 - alpha))
+        ema.append(nxt)
+        prev = nxt
+    return ema
+
+
+def compute_sma_last(closes: list[float], window: int) -> float | None:
+    """Simple moving average of the last `window` values."""
+    if not closes or len(closes) < window:
+        return None
+    tail = closes[-window:]
+    return sum(tail) / float(window)
+
+
 def _get_stock_data_yahoo_direct(symbol: str, period: str = "3mo") -> dict:
     """
     Fetch stock history directly from Yahoo Finance chart API.
     Used as fallback when yfinance library fails (Brotli decode errors).
     """
-    import requests as _req, datetime as _dt
+    # Legacy helper kept for backward compatibility, but the production path
+    # now uses `services.price_fetcher` + pure-Python indicator math.
+    return {"error": "Legacy indicator helper unused", "symbol": symbol}
     _range_map = {"1mo": "1mo", "3mo": "3mo", "6mo": "6mo", "1y": "1y"}
     yf_range = _range_map.get(period, "3mo")
     try:
@@ -172,88 +216,118 @@ def _get_stock_data_yahoo_direct(symbol: str, period: str = "3mo") -> dict:
         print(f"[Indicators-Direct] Error for {symbol}: {e}")
         return {"error": str(e), "symbol": symbol}
 
-
 def get_stock_data(symbol: str, period: str = "3mo") -> dict:
-    ns_symbol = add_ns_suffix(symbol)
+    """
+    Unified stock data for radar/cards:
+    - Current price from NSE quote (with explicit freshness tagging)
+    - Close series from multi-source provider (Alpha Vantage, Yahoo chart, stale cache)
+    - Compute RSI + EMA signals from the close series
+
+    IMPORTANT: When price data is unavailable (or invalid), return an `error` dict.
+    Downstream code is expected to skip signal/card generation in that case.
+    """
     try:
-        ticker = yf.Ticker(ns_symbol)
-        hist = ticker.history(period=period)
-        if hist.empty:
-            hist = ticker.history(period="1mo")
-            if hist.empty:
-                print(f"[Indicators] yfinance empty for {symbol} — trying direct Yahoo API")
-                return _get_stock_data_yahoo_direct(symbol, period)
+        current = fetch_current_price(symbol).to_stock_fields()
+        series = fetch_close_series(symbol, window_days=180).payload or {}
 
-        close = hist["Close"]
-        if USE_PANDAS_TA:
-            hist["RSI"] = ta.rsi(close, length=14)
-            hist["EMA20"] = ta.ema(close, length=20)
-            hist["EMA50"] = ta.ema(close, length=50)
-            hist["SMA200"] = ta.sma(close, length=200)
-        elif USE_TA_LIB:
-            hist["RSI"] = RSIIndicator(close=close, window=14).rsi()
-            hist["EMA20"] = EMAIndicator(close=close, window=20).ema_indicator()
-            hist["EMA50"] = EMAIndicator(close=close, window=50).ema_indicator()
-            hist["SMA200"] = SMAIndicator(close=close, window=200).sma_indicator()
-        else:
-            hist["RSI"] = compute_rsi_manual(close, 14)
-            hist["EMA20"] = close.ewm(span=20, adjust=False).mean()
-            hist["EMA50"] = close.ewm(span=50, adjust=False).mean()
-            hist["SMA200"] = close.rolling(200).mean()
+        price = current.get("current_price")
+        if not isinstance(price, (int, float)) or price <= 0 or (isinstance(price, float) and math.isnan(price)):
+            return {"error": "Price data unavailable", "symbol": (symbol or "").upper()}
 
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2] if len(hist) >= 2 else latest
+        closes = series.get("closes") or []
+        dates = series.get("dates") or []
+        if not closes or len(closes) < 50 or len(dates) < 50:
+            return {"error": "Insufficient price history", "symbol": (symbol or "").upper()}
+
+        # Indicators
+        rsi_vals = compute_rsi_manual(closes, 14)
+        ema20_vals = compute_ema(closes, 20)
+        ema50_vals = compute_ema(closes, 50)
+        sma200_last = compute_sma_last(closes, 200)
+
+        last_idx = len(closes) - 1
+        prev_idx = last_idx - 1 if last_idx >= 1 else last_idx
+
+        last_rsi = rsi_vals[last_idx] if rsi_vals else None
+        last_ema20 = ema20_vals[last_idx] if ema20_vals else None
+        last_ema50 = ema50_vals[last_idx] if ema50_vals else None
+
+        change_pct = current.get("change_pct")
+        if change_pct is None or (isinstance(change_pct, float) and math.isnan(change_pct)):
+            prev_close = closes[prev_idx] if prev_idx >= 0 else closes[last_idx]
+            change_pct = round((closes[last_idx] - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+
         ema_signal = "neutral"
-        if pd.notna(latest["EMA20"]) and pd.notna(latest["EMA50"]):
-            if latest["EMA20"] > latest["EMA50"]:
-                ema_signal = "bullish_crossover" if prev["EMA20"] <= prev["EMA50"] else "bullish"
-            elif latest["EMA20"] < latest["EMA50"]:
-                ema_signal = "bearish_crossover" if prev["EMA20"] >= prev["EMA50"] else "bearish"
+        if last_ema20 is not None and last_ema50 is not None:
+            prev_ema20 = ema20_vals[prev_idx] if len(ema20_vals) > prev_idx else last_ema20
+            prev_ema50 = ema50_vals[prev_idx] if len(ema50_vals) > prev_idx else last_ema50
+            if float(last_ema20) > float(last_ema50):
+                ema_signal = "bullish_crossover" if float(prev_ema20) <= float(prev_ema50) else "bullish"
+            elif float(last_ema20) < float(last_ema50):
+                ema_signal = "bearish_crossover" if float(prev_ema20) >= float(prev_ema50) else "bearish"
 
-        last_30 = hist.tail(30)["Close"].round(2).tolist()
-        dates_30 = [str(d.date()) for d in hist.tail(30).index]
-        current_price = round(float(latest["Close"]), 2)
-        prev_price = round(float(prev["Close"]), 2)
-        change_pct = round((current_price - prev_price) / prev_price * 100, 2)
+        last_30 = [round(float(c), 2) for c in closes[-30:]]
+        dates_30 = dates[-30:]
+
+        window_52w = 252
+        closes_52w = closes[-window_52w:]
+        high_52w = max(closes_52w) if closes_52w else None
+        low_52w = min(closes_52w) if closes_52w else None
 
         return {
-            "symbol": symbol.upper(),
-            "current_price": current_price,
+            "symbol": (symbol or "").upper(),
+            "current_price": round(float(price), 2),
             "change_pct": change_pct,
-            "volume": int(latest.get("Volume", 0)),
-            "rsi": round(float(latest["RSI"]), 1) if pd.notna(latest["RSI"]) else None,
-            "ema20": round(float(latest["EMA20"]), 2) if pd.notna(latest["EMA20"]) else None,
-            "ema50": round(float(latest["EMA50"]), 2) if pd.notna(latest["EMA50"]) else None,
-            "sma200": round(float(latest["SMA200"]), 2) if pd.notna(latest["SMA200"]) else None,
+            "volume": current.get("volume"),
+            "rsi": round(float(last_rsi), 1) if last_rsi is not None else None,
+            "ema20": round(float(last_ema20), 2) if last_ema20 is not None else None,
+            "ema50": round(float(last_ema50), 2) if last_ema50 is not None else None,
+            "sma200": round(float(sma200_last), 2) if sma200_last is not None else None,
             "ema_signal": ema_signal,
-            "rsi_zone": interpret_rsi(latest["RSI"]),
+            "rsi_zone": interpret_rsi(last_rsi),
             "price_30d": last_30,
             "dates_30d": dates_30,
-            "high_52w": round(float(hist["High"].max()), 2),
-            "low_52w": round(float(hist["Low"].min()), 2),
-            "avg_volume_20d": int(hist["Volume"].tail(20).mean()),
+            "high_52w": round(high_52w, 2) if high_52w is not None else None,
+            "low_52w": round(low_52w, 2) if low_52w is not None else None,
+            "avg_volume_20d": None,
+            "price_data_quality": current.get("price_data_quality"),
+            "price_source": current.get("price_source"),
+            "price_timestamp": current.get("price_timestamp"),
         }
     except Exception as e:
-        print(f"[Indicators] yfinance error for {symbol}: {e} — trying direct Yahoo API")
-        return _get_stock_data_yahoo_direct(symbol, period)
+        return {"error": f"Indicator pipeline error: {e}", "symbol": (symbol or "").upper()}
 
 
 def get_nifty_snapshot() -> dict:
+    """
+    Small helper for chat context.
+    Uses Yahoo chart endpoint directly (no yfinance).
+    """
     try:
-        nifty = yf.Ticker("^NSEI")
-        hist = nifty.history(period="5d")
-        if len(hist) < 2:
-            return {}
-        latest = hist.iloc[-1]
-        prev = hist.iloc[-2]
-        change_pct = round(
-            (float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"]) * 100, 2
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI",
+            params={"range": "5d", "interval": "1d"},
+            headers={"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip, deflate"},
+            timeout=12,
         )
+        resp.raise_for_status()
+        data = resp.json()
+        res = (data.get("chart", {}).get("result") or [None])[0]
+        if not res:
+            return {}
+        timestamps = res.get("timestamp") or []
+        q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+        closes = q.get("close") or []
+        valid = [(ts, c) for ts, c in zip(timestamps, closes) if c is not None]
+        if len(valid) < 2:
+            return {}
+        last_close = float(valid[-1][1])
+        prev_close = float(valid[-2][1])
+        change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else 0.0
         return {
-            "nifty50": round(float(latest["Close"]), 2),
+            "nifty50": round(last_close, 2),
             "nifty50_change_pct": change_pct,
             "nifty50_direction": "up" if change_pct > 0 else "down",
         }
-    except Exception as e:
-        print(f"[Nifty] Snapshot error: {e}")
+    except Exception:
         return {}

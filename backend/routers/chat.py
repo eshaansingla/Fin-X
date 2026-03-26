@@ -1,11 +1,12 @@
 # backend/routers/chat.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from typing import Optional
 from database import db_execute, db_fetchall
 from services.gpt import chat_response
 import uuid
+from routers.auth import get_current_user
 
 router = APIRouter()
 
@@ -28,26 +29,27 @@ class ChatRequest(BaseModel):
 
 
 @router.post('/chat')
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     """
     Stateful multi-turn chat endpoint.
     Prefers Gemini; falls back to OpenAI if Gemini is unavailable.
     """
     try:
         session_id = req.session_id or str(uuid.uuid4())
+        user_id = int(user["id"])
 
         # Save incoming user message
         db_execute(
-            'INSERT INTO chat_sessions (session_id, role, content) VALUES (?,?,?)',
-            (session_id, 'user', req.message)
+            'INSERT INTO chat_sessions (session_id, user_id, role, content) VALUES (?,?,?,?)',
+            (session_id, user_id, 'user', req.message)
         )
 
         # Load last 10 turns (DESC from DB, then reverse for chronological order)
         history = db_fetchall(
             '''SELECT role, content FROM chat_sessions
-               WHERE session_id=?
+               WHERE session_id=? AND user_id=?
                ORDER BY created_at DESC LIMIT 10''',
-            (session_id,)
+            (session_id, user_id)
         )
         history.reverse()
 
@@ -56,14 +58,14 @@ def chat(req: ChatRequest):
 
         # Save assistant reply
         db_execute(
-            'INSERT INTO chat_sessions (session_id, role, content) VALUES (?,?,?)',
-            (session_id, 'assistant', reply)
+            'INSERT INTO chat_sessions (session_id, user_id, role, content) VALUES (?,?,?,?)',
+            (session_id, user_id, 'assistant', reply)
         )
 
         # Get total message count
         total = db_fetchall(
-            'SELECT COUNT(*) as cnt FROM chat_sessions WHERE session_id=?',
-            (session_id,)
+            'SELECT COUNT(*) as cnt FROM chat_sessions WHERE session_id=? AND user_id=?',
+            (session_id, user_id)
         )
 
         return {
@@ -89,10 +91,13 @@ def chat(req: ChatRequest):
 
 
 @router.delete('/chat/{session_id}')
-def clear_chat(session_id: str):
+def clear_chat(session_id: str, user: dict = Depends(get_current_user)):
     """Deletes all messages for a session."""
     try:
-        db_execute('DELETE FROM chat_sessions WHERE session_id=?', (session_id,))
+        db_execute(
+            'DELETE FROM chat_sessions WHERE session_id=? AND user_id=?',
+            (session_id, int(user["id"])),
+        )
         return {
             'success': True,
             'data': {'cleared': True, 'session_id': session_id},

@@ -6,7 +6,7 @@ import os
 
 print("\n=== VERIFYING DATABASE INTEGRITY ===")
 try:
-    conn = sqlite3.connect("backend/data/falcon.db")
+    conn = sqlite3.connect("backend/data/finx.db")
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode;")
     mode = cur.fetchone()[0]

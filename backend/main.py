@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from database import init_db
-from routers import chat, signals, cards, health
+from routers import chat, signals, cards, health, auth, portfolio
 from routers import search as search_router
 from routers import market as market_router
 from routers import inshorts as inshorts_router
@@ -18,12 +18,12 @@ async def lifespan(app: FastAPI):
     # Startup
     init_db()
     start_scheduler()
-    print('[FALCON-X] Server ready — API docs at /docs')
+    print('[FIN-X] Server ready — API docs at /docs')
     yield
     # Shutdown (nothing needed — daemon thread dies with process)
 
 app = FastAPI(
-    title       = 'FALCON-X API',
+    title       = 'FIN-X API',
     description = 'NSE Opportunity Radar & AI Market Intelligence for Indian Investors',
     version     = '1.0.0',
     docs_url    = '/docs',
@@ -48,6 +48,8 @@ app.include_router(health.router,        prefix='/api', tags=['Health'])
 app.include_router(signals.router,       prefix='/api', tags=['Signals'])
 app.include_router(cards.router,         prefix='/api', tags=['Cards'])
 app.include_router(chat.router,          prefix='/api', tags=['Chat'])
+app.include_router(auth.router,          prefix='/api', tags=['Auth'])
+app.include_router(portfolio.router,     prefix='/api', tags=['Portfolio'])
 app.include_router(search_router.router, prefix='/api', tags=['Search'])
 app.include_router(market_router.router, prefix='/api', tags=['Market'])
 app.include_router(inshorts_router.router, prefix='/api', tags=['Inshorts'])

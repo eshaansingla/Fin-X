@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FALCON-X API - Complete Endpoint Pass Report
+FIN-X API - Complete Endpoint Pass Report
 """
 
 import requests
@@ -11,7 +11,7 @@ BASE_URL = 'http://localhost:8000/api'
 
 def main():
     print('\n' + '#'*80)
-    print('# FALCON-X API - COMPLETE ENDPOINT PASS REPORT')
+    print('# FIN-X API - COMPLETE ENDPOINT PASS REPORT')
     print('#'*80)
     print(f'Timestamp: {datetime.utcnow().isoformat()}')
     print(f'Server: {BASE_URL}')

@@ -3,7 +3,7 @@ import os, json, re, time, datetime
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(override=True)
-from database import db_fetchall
+from database import db_fetchall, db_fetchone, db_execute
 
 # ── API keys ─────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -23,6 +23,46 @@ except Exception as e:
     print(f'[WARN] Gemini configure error: {e}')
 
 MODEL_NAME = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-lite')
+
+# Gemini free-tier quota management (default values from project notes).
+GEMINI_DAILY_LIMIT = int(os.getenv('GEMINI_DAILY_LIMIT', '20'))
+# When used-calls >= this threshold, we switch to OpenAI to avoid Gemini exhaustion.
+GEMINI_NEAR_THRESHOLD = int(os.getenv('GEMINI_NEAR_THRESHOLD', '15'))
+
+def _utc_today_str() -> str:
+    return datetime.datetime.utcnow().date().isoformat()
+
+def _get_gemini_call_count_today() -> int:
+    """Returns Gemini call_count for today (UTC). Returns 0 if unavailable."""
+    today = _utc_today_str()
+    try:
+        row = db_fetchone('SELECT call_count FROM gemini_usage WHERE usage_date=?', (today,))
+        if row and row.get('call_count') is not None:
+            return int(row.get('call_count') or 0)
+        # Ensure row exists for stable increments.
+        db_execute(
+            'INSERT OR IGNORE INTO gemini_usage (usage_date, call_count) VALUES (?, 0)',
+            (today,)
+        )
+        row = db_fetchone('SELECT call_count FROM gemini_usage WHERE usage_date=?', (today,))
+        return int(row.get('call_count') or 0) if row else 0
+    except Exception:
+        return 0
+
+def _increment_gemini_call_count_today() -> None:
+    """Atomically increments Gemini call_count for today (UTC)."""
+    today = _utc_today_str()
+    try:
+        db_execute(
+            '''UPDATE gemini_usage
+               SET call_count = call_count + 1,
+                   updated_at = datetime('now')
+               WHERE usage_date=?''',
+            (today,)
+        )
+    except Exception:
+        # Best-effort only; quota tracking should never crash AI calls.
+        pass
 
 # ── Prompt loader ────────────────────────────────────────────
 PROMPTS_DIR = Path(__file__).parent.parent / 'prompts'
@@ -100,6 +140,17 @@ def gemini_call(
     if not _genai:
         print('[Gemini] Not configured — using OpenAI fallback')
         return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
+
+    # Gemini quota management: avoid near-exhaustion by switching to OpenAI.
+    try:
+        used_calls = _get_gemini_call_count_today()
+        if used_calls >= GEMINI_NEAR_THRESHOLD or used_calls >= GEMINI_DAILY_LIMIT:
+            # OpenAI is the "safe" path when Gemini is near exhaustion.
+            return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
+        # Count the Gemini call before execution (best-effort).
+        _increment_gemini_call_count_today()
+    except Exception:
+        pass
 
     generation_config = _genai.types.GenerationConfig(
         temperature=temperature,
@@ -233,135 +284,78 @@ def _build_stock_context(user_message: str) -> str:
 # ── Rule-based signal engine ──────────────────────────────────
 def _rule_based_signal_explanation(deal: dict, stock_data: dict) -> dict:
     """
-    Generate a real, data-driven signal explanation when AI is unavailable.
-    Derives risk level, signal type, and explanation from actual indicators.
+    Rule-based signal generation used when both Gemini + OpenAI are unavailable.
+    The spec intentionally uses *only* RSI + EMA to derive `signal_type`.
     """
     symbol     = (deal.get('symbol') or stock_data.get('symbol') or 'UNKNOWN').upper()
-    qty        = deal.get('quantity') or deal.get('qty') or 0
-    deal_price = deal.get('price') or deal.get('deal_price') or stock_data.get('current_price') or 0
-    client     = (
-        deal.get('client_name') or deal.get('client') or
-        deal.get('buyer_name')  or deal.get('seller_name') or
-        'Institutional participant'
-    )
-    deal_type  = deal.get('deal_type') or deal.get('type') or 'bulk'
+    rsi = stock_data.get('rsi')
+    ema_signal = (stock_data.get('ema_signal') or 'neutral').lower()
+    ema_is_bullish = 'bullish' in ema_signal
+    ema_is_bearish = 'bearish' in ema_signal
 
-    rsi          = stock_data.get('rsi')
-    ema_signal   = (stock_data.get('ema_signal') or 'neutral').lower()
-    change_pct   = float(stock_data.get('change_pct') or 0)
-    current_px   = float(stock_data.get('current_price') or deal_price or 0)
-    high_52w     = stock_data.get('high_52w')
-    low_52w      = stock_data.get('low_52w')
-
-    # ── Signal type from combined indicators ──────────────────
-    bull = 0
-    bear = 0
-    if change_pct > 1:
-        bull += 1
-    elif change_pct < -1:
-        bear += 1
-    if 'bullish' in ema_signal:
-        bull += 1
-    elif 'bearish' in ema_signal:
-        bear += 1
+    # Spec-required signal type logic.
+    signal_type = 'neutral'
     if rsi is not None:
-        if rsi <= 35:
-            bull += 1   # oversold → mean-reversion upside
-        elif rsi >= 65:
-            bear += 1   # overbought → potential correction
-
-    if bull > bear:
-        signal_type = 'bullish'
-    elif bear > bull:
-        signal_type = 'bearish'
-    else:
-        signal_type = 'neutral'
-
-    # ── Risk level from actual indicators ─────────────────────
-    risk_score = 0
-    if rsi is not None:
-        if rsi >= 75 or rsi <= 25:
-            risk_score += 3
-        elif rsi >= 70 or rsi <= 30:
-            risk_score += 2
-        elif rsi >= 65 or rsi <= 35:
-            risk_score += 1
-    if abs(change_pct) >= 5:
-        risk_score += 3
-    elif abs(change_pct) >= 3:
-        risk_score += 2
-    elif abs(change_pct) >= 1.5:
-        risk_score += 1
-    if 'crossover' in ema_signal:
-        risk_score += 1   # transitional phase = uncertainty
-    if current_px and high_52w and low_52w:
         try:
-            rng = float(high_52w) - float(low_52w)
-            if rng > 0:
-                pos = (current_px - float(low_52w)) / rng
-                if pos >= 0.92 or pos <= 0.08:
-                    risk_score += 2  # near 52w extreme
+            rsi_val = float(rsi)
+            if rsi_val < 30 and ema_is_bullish:
+                signal_type = 'bullish'
+            elif rsi_val > 70:
+                signal_type = 'bearish'
         except (TypeError, ValueError):
-            pass
+            signal_type = 'neutral'
 
-    if risk_score >= 5:
+    confidence = 45
+    if signal_type == 'bullish':
+        confidence = 65
+    elif signal_type == 'bearish':
+        confidence = 60
+
+    # Lightweight risk mapping using RSI extremes.
+    if signal_type == 'bearish':
         risk_level = 'high'
-    elif risk_score >= 2:
+    elif signal_type == 'bullish':
         risk_level = 'medium'
     else:
         risk_level = 'low'
 
-    # ── Build explanation ─────────────────────────────────────
-    qty_str  = f'{int(qty):,}' if qty else 'significant'
-    px_str   = f'₹{float(deal_price):,.2f}' if deal_price else 'market price'
-    direction = 'up' if change_pct >= 0 else 'down'
+    rsi_part = f'RSI is {round(float(rsi), 1)}' if rsi is not None else 'RSI is unavailable'
+    ema_part = f'EMA indicates {("upward" if ema_is_bullish else "downward" if ema_is_bearish else "neutral")} momentum'
 
-    explanation = (
-        f'{client} executed a {deal_type} deal of {qty_str} shares of {symbol} '
-        f'at {px_str}. The stock is {direction} {abs(change_pct):.2f}% today'
-    )
-    if rsi is not None:
-        rsi_desc = ('overbought' if rsi >= 70 else
-                    'oversold'   if rsi <= 30 else
-                    'neutral zone')
-        explanation += f', with RSI at {round(rsi, 1)} ({rsi_desc})'
-    explanation += f'. EMA trend is {ema_signal.replace("_", " ")}.'
-    if current_px and high_52w and low_52w:
-        try:
-            rng = float(high_52w) - float(low_52w)
-            if rng > 0:
-                pos = (current_px - float(low_52w)) / rng * 100
-                explanation += (
-                    f' Trading at {round(pos)}% of its 52-week range '
-                    f'(₹{float(low_52w):,.0f}–₹{float(high_52w):,.0f}).'
-                )
-        except (TypeError, ValueError):
-            pass
-
-    # ── Key observation ───────────────────────────────────────
+    # Spec-required explanation shape: RSI zone + EMA momentum support.
     if signal_type == 'bullish':
-        key_obs = f'{deal_type.capitalize()} deal at {px_str} with bullish setup — EMA: {ema_signal.replace("_"," ")}.'
-        if rsi is not None and rsi <= 35:
-            key_obs += ' RSI in oversold territory suggests mean-reversion potential.'
+        explanation = (
+            f'{rsi_part} (oversold) and {ema_part} with bullish setup. '
+            f'Rule-based fallback used because Gemini/OpenAI quota is exhausted. '
+            f'No AI provider available for deeper analysis.'
+        )
     elif signal_type == 'bearish':
-        key_obs = f'Deal at {px_str} amid bearish technicals. Monitor support levels closely.'
-        if rsi is not None and rsi >= 65:
-            key_obs += ' Elevated RSI — institutional selling pressure may persist.'
+        explanation = (
+            f'{rsi_part} (overbought). {ema_part}. '
+            f'Rule-based fallback used because Gemini/OpenAI quota is exhausted. '
+            f'No AI provider available for deeper analysis.'
+        )
     else:
-        key_obs = (
-            f'Deal at {px_str}. Mixed signals — watch EMA convergence '
-            f'and volume confirmation before positioning.'
+        explanation = (
+            f'{rsi_part}. {ema_part}. '
+            f'Rule-based fallback used because Gemini/OpenAI quota is exhausted. '
+            f'No AI provider available for deeper analysis.'
         )
 
-    confidence = max(30, min(85, 50 + bull * 8 - bear * 5))
+    key_obs = (
+        'Oversold + bullish EMA setup suggests potential mean-reversion.' if signal_type == 'bullish' else
+        'Overbought RSI suggests potential pullback risk.' if signal_type == 'bearish' else
+        'Mixed RSI/EMA conditions — treat as neutral until AI is available.'
+    )
 
     return {
-        'explanation':     explanation,
-        'signal_type':     signal_type,
-        'risk_level':      risk_level,
-        'confidence':      confidence,
+        'explanation': explanation,
+        'signal_type': signal_type,
+        'risk_level': risk_level,
+        'confidence': confidence,
         'key_observation': key_obs,
-        'disclaimer':      'For educational purposes only. Not SEBI-registered investment advice.',
+        'ai_provider': 'rule_based',
+        'disclaimer': 'For educational purposes only. Not financial advice.',
     }
 
 
@@ -405,7 +399,7 @@ def generate_signal_card(symbol: str, stock_data: dict, news: list) -> dict:
         'news_impact_summary': 'News data unavailable.',
         'risk_flags':          [],
         'actionable_context':  'Please check NSE and ET Markets directly.',
-        'disclaimer':          'For educational purposes only. Not SEBI-registered investment advice.',
+        'disclaimer':          'For educational purposes only. Not financial advice.',
     }
     try:
         news_text = '\n'.join(f"- {n['headline']}" for n in news[:5]) \
@@ -447,6 +441,15 @@ def chat_response(messages: list) -> str:
                 'role':  remap_role(msg['role']),
                 'parts': [{'text': msg['content']}],
             })
+
+        # Gemini quota management for chat as well: switch to OpenAI when near exhaustion.
+        try:
+            used_calls = _get_gemini_call_count_today()
+            if used_calls >= GEMINI_NEAR_THRESHOLD or used_calls >= GEMINI_DAILY_LIMIT:
+                return _openai_chat(messages, augmented_content)
+            _increment_gemini_call_count_today()
+        except Exception:
+            pass
 
         model = _genai.GenerativeModel(
             model_name=MODEL_NAME,

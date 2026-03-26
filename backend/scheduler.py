@@ -3,10 +3,169 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import os, logging
 import time
+import threading
+from typing import Dict, Any
 
 logging.basicConfig(level=logging.INFO)
 logger    = logging.getLogger('[Scheduler]')
 scheduler = BackgroundScheduler()
+
+# Exposed to the frontend via `/api/health` for first-run seeding UX.
+_WARMUP_STATE: Dict[str, Any] = {
+    "active": False,
+    "stage": "",
+    "progress": 0,
+    "started_at": None,
+    "updated_at": None,
+}
+_WARMUP_LOCK = threading.Lock()
+
+
+def get_warmup_state() -> Dict[str, Any]:
+    with _WARMUP_LOCK:
+        return dict(_WARMUP_STATE)
+
+
+def _set_warmup_state(**patch: Any) -> None:
+    with _WARMUP_LOCK:
+        _WARMUP_STATE.update(patch)
+        _WARMUP_STATE["updated_at"] = time.time()
+
+
+def warmup_seed_if_needed() -> None:
+    """
+    First-run developer/demo experience:
+    - If `signals` is empty, fetch last 7 days of NSE bulk/block deals.
+    - Generate initial signals (up to 10 deal-derived signals).
+    - If still empty, generate synthetic signals for top popular stocks.
+    """
+    from database import db_fetchone, db_fetchall, db_execute
+    from services.nse_fetcher import (
+        fetch_bulk_deals_lookback,
+        fetch_block_deals_lookback,
+        save_bulk_deals_to_db,
+    )
+    from services.indicators import POPULAR_STOCKS, get_stock_data
+    from services.news_fetcher import get_stock_news
+    from services.gpt import explain_signal
+
+    # If we already have signals, do nothing.
+    row = db_fetchone("SELECT COUNT(*) as cnt FROM signals")
+    if row and int(row.get("cnt") or 0) > 0:
+        return
+
+    _set_warmup_state(active=True, stage="initializing", progress=0, started_at=time.time())
+    logger.info("[Warmup] No signals found — warming up radar data...")
+
+    # 1) Fetch last 7 days of deals.
+    _set_warmup_state(stage="fetching_deals", progress=10)
+    deals = fetch_bulk_deals_lookback(7) + fetch_block_deals_lookback(7)
+    _set_warmup_state(stage="saving_deals", progress=25)
+    saved = save_bulk_deals_to_db(deals)
+    logger.info(f"[Warmup] Saved {saved} deals")
+
+    # 2) Generate AI/rule-based signals for unsignalled deals.
+    _set_warmup_state(stage="generating_signals", progress=40)
+    unsignalled = db_fetchall(
+        '''SELECT bd.* FROM bulk_deals bd
+           LEFT JOIN signals s ON s.deal_id = bd.id
+           WHERE s.id IS NULL
+           ORDER BY bd.quantity DESC
+           LIMIT 10'''
+    )
+    generated = 0
+    for deal in unsignalled:
+        try:
+            stock = get_stock_data(deal["symbol"])
+            if "error" in stock:
+                continue
+            signal = explain_signal(deal, stock)
+            db_execute(
+                '''INSERT INTO signals
+                   (deal_id, symbol, explanation, signal_type, risk_level,
+                    confidence, key_observation, disclaimer, ai_provider)
+                   VALUES (?,?,?,?,?,?,?,?,?)''',
+                (
+                    deal["id"],
+                    deal["symbol"],
+                    signal.get("explanation", ""),
+                    signal.get("signal_type", "neutral"),
+                    signal.get("risk_level", "medium"),
+                    signal.get("confidence", 50),
+                    signal.get("key_observation", ""),
+                    signal.get("disclaimer", "For educational purposes only. Not financial advice."),
+                    signal.get("ai_provider"),
+                ),
+            )
+            generated += 1
+            if generated >= 10:
+                break
+            _set_warmup_state(progress=min(85, 40 + generated * 5))
+            time.sleep(1.2)
+        except Exception as e:
+            logger.error(f"[Warmup] Error processing deal {deal.get('id')}: {e}")
+            continue
+
+    # 3) Still nothing? Create synthetic signals for popular stocks.
+    if generated == 0:
+        _set_warmup_state(stage="synthetic_popular_signals", progress=70)
+        # Top 10 popular symbols (already used elsewhere for card prefetch).
+        popular_symbols = [s.replace(".NS", "")[:10] for s in POPULAR_STOCKS[:10]]
+        for i, sym in enumerate(popular_symbols):
+            try:
+                stock = get_stock_data(sym)
+                if "error" in stock:
+                    continue
+                price = stock.get("current_price") or 0
+                deal_id = db_execute(
+                    '''INSERT INTO bulk_deals
+                       (symbol, client_name, deal_type, quantity, price, deal_date)
+                       VALUES (?,?,?,?,?,?)''',
+                    (
+                        sym,
+                        "Market Intelligence",
+                        "B",
+                        0,
+                        float(price) if price else 0.0,
+                        time.strftime("%Y-%m-%d"),
+                    ),
+                )
+                deal = {
+                    "id": deal_id,
+                    "symbol": sym,
+                    "deal_type": "B",
+                    "quantity": 0,
+                    "price": price,
+                    "deal_date": time.strftime("%Y-%m-%d"),
+                    "client_name": "Market Intelligence",
+                }
+                signal = explain_signal(deal, stock)
+                db_execute(
+                    '''INSERT INTO signals
+                       (deal_id, symbol, explanation, signal_type, risk_level,
+                        confidence, key_observation, disclaimer, ai_provider)
+                       VALUES (?,?,?,?,?,?,?,?,?)''',
+                    (
+                        deal_id,
+                        sym,
+                        signal.get("explanation", ""),
+                        signal.get("signal_type", "neutral"),
+                        signal.get("risk_level", "medium"),
+                        signal.get("confidence", 50),
+                        signal.get("key_observation", ""),
+                        signal.get("disclaimer", "For educational purposes only. Not financial advice."),
+                        signal.get("ai_provider"),
+                    ),
+                )
+                generated += 1
+                _set_warmup_state(progress=min(95, 70 + i * 3))
+                time.sleep(0.8)
+            except Exception as e:
+                logger.error(f"[Warmup] Synthetic signal failed for {sym}: {e}")
+                continue
+
+    _set_warmup_state(active=False, stage="done", progress=100)
+    logger.info(f"[Warmup] Done. Signals generated: {generated}")
 
 # All 50 movers symbols kept hot in the quote cache during market hours.
 # Matches _SYMBOLS in routers/market.py — update both together.
@@ -37,15 +196,21 @@ def run_radar_job():
         from services.gpt import explain_signal
         from database import db_fetchall, db_execute
 
-        deals     = fetch_bulk_deals() + fetch_block_deals()
-        logger.info(f'Fetched {len(deals)} deals from NSE')
+        bulk = fetch_bulk_deals()
+        block = fetch_block_deals()
+        deals = bulk + block
+        logger.info(f'Fetched {len(deals)} deals from NSE (bulk={len(bulk)}, block={len(block)})')
+
+        # If NSE live endpoints return nothing (common on weekends/holidays),
+        # do a 7-day lookback so the radar stays populated.
+        if not deals:
+            logger.info('[Radar] No deals from live endpoints — using 7-day lookback')
+            from services.nse_fetcher import fetch_bulk_deals_lookback, fetch_block_deals_lookback
+            deals = fetch_bulk_deals_lookback(7) + fetch_block_deals_lookback(7)
+            logger.info(f'[Radar] Lookback fetched {len(deals)} deals')
 
         new_count = save_bulk_deals_to_db(deals)
         logger.info(f'Saved {new_count} new deals to DB')
-
-        if new_count == 0:
-            logger.info('No new deals — skipping AI processing')
-            return
 
         unsignalled = db_fetchall(
             '''SELECT bd.* FROM bulk_deals bd
@@ -67,8 +232,8 @@ def run_radar_job():
                 db_execute(
                     '''INSERT INTO signals
                        (deal_id, symbol, explanation, signal_type, risk_level,
-                        confidence, key_observation, disclaimer)
-                       VALUES (?,?,?,?,?,?,?,?)''',
+                        confidence, key_observation, disclaimer, ai_provider)
+                       VALUES (?,?,?,?,?,?,?,?,?)''',
                     (
                         deal['id'],
                         deal['symbol'],
@@ -77,7 +242,8 @@ def run_radar_job():
                         signal.get('risk_level',      'medium'),
                         signal.get('confidence',       50),
                         signal.get('key_observation', ''),
-                        signal.get('disclaimer', 'For educational purposes only. Not SEBI-registered investment advice.'),
+                        signal.get('disclaimer', 'For educational purposes only. Not financial advice.'),
+                        signal.get('ai_provider'),
                     )
                 )
                 logger.info(f"Signal created: {deal['symbol']} — {signal.get('signal_type')}")
@@ -250,10 +416,6 @@ def start_scheduler():
     Configures and starts the APScheduler background scheduler.
     Guard against duplicate starts (e.g. uvicorn --reload).
     """
-    if scheduler.running:
-        logger.info('Scheduler already running — skipping start')
-        return
-
     interval_hours = int(os.getenv('RADAR_INTERVAL_HOURS', '1'))
 
     scheduler.add_job(
@@ -272,6 +434,16 @@ def start_scheduler():
         run_date         = dt.datetime.now() + dt.timedelta(seconds=10),
         id               = 'radar_startup',
         replace_existing = True,
+    )
+
+    # First-run warmup job (demo UX): run after prefetch_popular_stocks kicks in.
+    scheduler.add_job(
+        warmup_seed_if_needed,
+        trigger          = 'date',
+        run_date         = dt.datetime.now() + dt.timedelta(seconds=45),
+        id               = 'warmup_seed_if_needed',
+        replace_existing = True,
+        max_instances    = 1,
     )
 
     scheduler.add_job(
@@ -301,5 +473,8 @@ def start_scheduler():
         replace_existing = True,
     )
 
-    scheduler.start()
-    logger.info(f'Scheduler started — Opportunity Radar runs every {interval_hours}h')
+    if not scheduler.running:
+        scheduler.start()
+        logger.info(f'Scheduler started — Opportunity Radar runs every {interval_hours}h')
+    else:
+        logger.info(f'Scheduler already running — jobs ensured (Radar interval {interval_hours}h)')

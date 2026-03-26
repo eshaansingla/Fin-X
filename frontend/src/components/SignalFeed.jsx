@@ -37,6 +37,11 @@ function SignalItem({ s }) {
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize hidden sm:inline ${styles.badge}`}>
             {risk} risk
           </span>
+          {s.ai_provider === 'rule_based' && (
+            <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 hidden sm:inline">
+              Rule-based AI
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
           {hasPx && (

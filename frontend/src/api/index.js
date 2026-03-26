@@ -11,6 +11,14 @@ const fastApi = axios.create({
   timeout: 5000,
 })
 
+let _authToken = null
+
+export const setAuthToken = (token) => {
+  _authToken = token
+}
+
+export const getAuthToken = () => _authToken
+
 const _unwrap = r => {
   const body = r.data
   if (body && typeof body === 'object' && 'success' in body) {
@@ -30,6 +38,22 @@ const _onErr = err => {
 api.interceptors.response.use(_unwrap, _onErr)
 fastApi.interceptors.response.use(_unwrap, _onErr)
 
+api.interceptors.request.use((config) => {
+  if (_authToken) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${_authToken}`
+  }
+  return config
+})
+
+fastApi.interceptors.request.use((config) => {
+  if (_authToken) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${_authToken}`
+  }
+  return config
+})
+
 export const fetchSignals      = (p = {})   => api.get('/signals', { params: p })
 export const refreshRadar      = ()         => api.post('/signals/refresh')
 export const fetchSignalCard   = (sym, fr)  => api.get(`/card/${sym}`, { params: { force_refresh: fr } })
@@ -43,3 +67,6 @@ export const fetchMarketStatus = ()         => api.get('/market/status')
 export const fetchLiveQuote    = (sym)      => api.get(`/market/live/${sym}`)
 // Ultra-fast price-only fetch (no intraday chart) — for instant first render
 export const fetchQuickPrice   = (sym)      => fastApi.get(`/market/price/${sym}`)
+
+// Export the raw axios instances for auth flows (token-aware via interceptors).
+export { api, fastApi }

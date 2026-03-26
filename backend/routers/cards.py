@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
+import math
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import db_fetchone, db_execute
@@ -207,8 +208,9 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
             if nse_quote.get(src_key) is not None:
                 stock_data[dst_key] = nse_quote[src_key]
 
-    # ── Guard: need at least a price ─────────────────────────
-    if not stock_data.get('current_price'):
+    # ── Guard: need at least a valid, positive price ────────
+    cp = stock_data.get('current_price')
+    if cp is None or (isinstance(cp, float) and math.isnan(cp)) or (isinstance(cp, (int, float)) and cp <= 0):
         return JSONResponse(
             status_code=404,
             content={
@@ -233,7 +235,7 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
             'news_impact_summary': 'News data unavailable.',
             'risk_flags':          [],
             'actionable_context':  'Please check NSE and ET Markets directly.',
-            'disclaimer':          'For educational purposes only. Not SEBI-registered investment advice.',
+            'disclaimer':          'For educational purposes only. Not financial advice.',
         }
         news = []
 
@@ -253,6 +255,9 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
     card['rsi']           = stock_data.get('rsi')
     card['ema_signal']    = stock_data.get('ema_signal')
     card['rsi_zone']      = stock_data.get('rsi_zone')
+    card['price_data_quality'] = stock_data.get('price_data_quality')
+    card['price_source']  = stock_data.get('price_source')
+    card['price_timestamp'] = stock_data.get('price_timestamp')
     card['price_30d']     = stock_data.get('price_30d', [])
     card['dates_30d']     = stock_data.get('dates_30d', [])
     card['news']          = [

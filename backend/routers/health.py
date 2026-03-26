@@ -14,12 +14,22 @@ def health_check():
     """
     try:
         signal_count = db_fetchone('SELECT COUNT(*) as cnt FROM signals')
+        try:
+            # Local import to avoid circular imports during app startup.
+            from scheduler import get_warmup_state
+            warmup = get_warmup_state()
+        except Exception:
+            warmup = {"active": False, "stage": "", "progress": 0}
+
         return {
             'success': True,
             'data': {
                 'status':        'ok',
                 'timestamp':     datetime.utcnow().isoformat(),
                 'signals_in_db': signal_count['cnt'] if signal_count else 0,
+                'warming_up':    bool(warmup.get("active")),
+                'warmup_stage':  warmup.get("stage", ""),
+                'warmup_progress': int(warmup.get("progress") or 0),
             },
             'error': None,
         }

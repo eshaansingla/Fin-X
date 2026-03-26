@@ -10,7 +10,7 @@ from datetime import datetime
 BASE_URL = "http://localhost:8000/api"
 
 print("\n" + "#"*80)
-print("# FALCON-X API - QUICK ENDPOINT PASS")
+print("# FIN-X API - QUICK ENDPOINT PASS")
 print("#"*80)
 print(f"Testing: {BASE_URL}")
 print(f"Time: {datetime.utcnow().isoformat()}\n")
