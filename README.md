@@ -60,8 +60,7 @@ surfacing what it all *means* — in plain language, before the broader market r
 ### NSE Signal Card — Per-Stock Deep Analysis
 > Live price chart across 5 timeframes (1D / 1W / 1M / 5Y / ALL), RSI, EMA-20/50, MACD, Bollinger Bands — with full AI technical snapshot. Search any NSE ticker.
 
-<img src="screenshots/signal-card-dark.png" width="49%" alt="Signal Card Dark"/>
-<img src="screenshots/signal-card-light.png" width="49%" alt="Signal Card Light"/>
+<img src="screenshots/signal-card-dark.png" width="100%" alt="Signal Card Dark"/>
 
 ---
 
@@ -73,9 +72,11 @@ surfacing what it all *means* — in plain language, before the broader market r
 ---
 
 ### Light Mode — Full Theme Support
-> Complete dark/light toggle. Same live data, two aesthetics.
+> Complete dark/light toggle across all pages. Same live data, two aesthetics.
 
 <img src="screenshots/radar-light.png" width="100%" alt="Radar Light"/>
+
+<img src="screenshots/signal-card-light.png" width="100%" alt="Signal Card Light"/>
 
 ---
 
