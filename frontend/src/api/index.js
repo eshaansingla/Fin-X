@@ -65,8 +65,18 @@ export const fetchMarketMovers = ()         => api.get('/market/movers')
 export const fetchInshorts     = (force)    => api.get('/inshorts', { params: { force_refresh: force || false } })
 export const fetchMarketStatus = ()         => api.get('/market/status')
 export const fetchLiveQuote    = (sym)      => api.get(`/market/live/${sym}`)
+export const fetchMarketChart  = (sym, p)   => api.get(`/market/chart/${sym}`, { params: { period: p } })
 // Ultra-fast price-only fetch (no intraday chart) — for instant first render
 export const fetchQuickPrice   = (sym)      => fastApi.get(`/market/price/${sym}`)
+
+export const getMarketWsUrl = (sym) => {
+  const base = import.meta.env.VITE_API_URL || '/api'
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const isAbs = /^https?:\/\//i.test(base)
+  const httpBase = isAbs ? base : `${origin}${base}`
+  const wsBase = httpBase.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:')
+  return `${wsBase}/market/ws/${encodeURIComponent(sym)}`
+}
 
 // Export the raw axios instances for auth flows (token-aware via interceptors).
 export { api, fastApi }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { api } from '../api'
 
 export default function AuthPage({ onAuthed }) {
   const { login, register, isAuthed } = useAuth()
@@ -8,6 +9,21 @@ export default function AuthPage({ onAuthed }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [checkEmail, setCheckEmail] = useState(false)
+  const [emailSent, setEmailSent] = useState(true)
+  const [fallbackLink, setFallbackLink] = useState('')
+  const [verifyStatus, setVerifyStatus] = useState(null) // 'ok' | 'fail' | null
+
+  // Handle ?verify=<token> in URL on page load
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('verify')
+    if (!token) return
+    // Clear the token from the URL without reload
+    window.history.replaceState({}, '', window.location.pathname)
+    api.get(`/auth/verify/${token}`)
+      .then(() => setVerifyStatus('ok'))
+      .catch(() => setVerifyStatus('fail'))
+  }, [])
 
   const submit = async (e) => {
     e?.preventDefault()
@@ -16,11 +32,14 @@ export default function AuthPage({ onAuthed }) {
     try {
       const payload = { email, password }
       if (mode === 'register') {
-        await register(payload)
+        const res = await register(payload)
+        setEmailSent(res?.email_sent !== false)
+        setFallbackLink(res?.verification_link || '')
+        setCheckEmail(true)
       } else {
         await login(payload)
+        onAuthed?.()
       }
-      onAuthed?.()
     } catch (err) {
       setError(err?.message || 'Authentication failed')
     } finally {
@@ -31,6 +50,73 @@ export default function AuthPage({ onAuthed }) {
   useEffect(() => {
     if (isAuthed) onAuthed?.()
   }, [isAuthed, onAuthed])
+
+  if (verifyStatus === 'ok') {
+    return (
+      <div className="max-w-md mx-auto">
+        <div className="rounded-lg border border-green-200 bg-white dark:bg-gray-900 dark:border-green-800 p-6">
+          <div className="text-lg font-semibold text-green-600 mb-1">Email verified!</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400 mb-4">Your account is now active. You can log in.</div>
+          <button
+            onClick={() => setVerifyStatus(null)}
+            className="text-sm text-blue-600 underline"
+          >
+            Go to login
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (verifyStatus === 'fail') {
+    return (
+      <div className="max-w-md mx-auto">
+        <div className="rounded-lg border border-red-200 bg-white dark:bg-gray-900 dark:border-red-800 p-6">
+          <div className="text-lg font-semibold text-red-600 mb-1">Invalid link</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400 mb-4">This verification link is invalid or has already been used.</div>
+          <button
+            onClick={() => setVerifyStatus(null)}
+            className="text-sm text-blue-600 underline"
+          >
+            Back to login
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (checkEmail) {
+    return (
+      <div className="max-w-md mx-auto">
+        <div className="rounded-lg border border-blue-200 bg-white dark:bg-gray-900 dark:border-blue-800 p-6">
+          <div className="text-lg font-semibold mb-1">Check your email</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400">
+            {emailSent ? (
+              <>
+                We sent a verification link to <span className="font-medium text-gray-700 dark:text-gray-200">{email}</span>.
+                Click the link to activate your account, then come back to log in.
+              </>
+            ) : (
+              <>
+                SMTP is not configured, so email was not sent. Use the verification link below for local testing.
+              </>
+            )}
+          </div>
+          {!emailSent && fallbackLink && (
+            <div className="mt-3 p-2 rounded bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs break-all text-gray-700 dark:text-gray-200">
+              {fallbackLink}
+            </div>
+          )}
+          <button
+            onClick={() => { setCheckEmail(false); setMode('login') }}
+            className="mt-4 text-sm text-blue-600 underline"
+          >
+            Back to login
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   if (isAuthed) {
     return (

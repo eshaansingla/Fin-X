@@ -9,6 +9,7 @@ Fallback: yfinance if NSE API fails
 import time
 import datetime
 import threading
+import os
 import requests as _requests
 from typing import Optional
 
@@ -66,10 +67,13 @@ def _reset_eq_session():
 _quote_cache: dict = {}   # {symbol: (timestamp, data)}
 _hist_cache:  dict = {}   # {"symbol_period": (timestamp, data)}
 _cache_lock   = threading.Lock()
-QUOTE_TTL       = 8    # seconds — live quote cache
-HIST_TTL        = 60   # seconds — 1w / 1m historical cache
-HIST_TTL_1D_OPEN   =  5  # seconds — intraday cache while market is open
+_hot_symbols: dict[str, float] = {}  # {symbol: last_requested_ts}
+QUOTE_TTL       = max(1, int(os.getenv("QUOTE_TTL_SECONDS", "2")))   # seconds
+HIST_TTL        = max(10, int(os.getenv("HIST_TTL_SECONDS", "60")))  # seconds
+HIST_TTL_1D_OPEN   =  max(1, int(os.getenv("HIST_TTL_1D_OPEN_SECONDS", "2")))  # seconds
 HIST_TTL_1D_CLOSED = 300 # seconds — intraday cache after market close
+HOT_SYMBOL_TTL_SECONDS = max(10, int(os.getenv("HOT_SYMBOL_TTL_SECONDS", "180")))
+MAX_HOT_SYMBOLS = max(5, int(os.getenv("MAX_HOT_SYMBOLS", "20")))
 
 # Common English words / finance terms to skip in symbol detection
 _STOPWORDS = {
@@ -113,6 +117,49 @@ def _is_valid_symbol(symbol: str) -> bool:
     if len(symbol) < 2 or len(symbol) > 10:
         return False
     return symbol.isalnum()
+
+
+def register_hot_symbol(symbol: str) -> None:
+    """
+    Mark a symbol as actively requested by clients so cache warmers can prioritize it.
+    """
+    sym = symbol.upper().strip().replace(".NS", "").replace(".BO", "")
+    if not _is_valid_symbol(sym):
+        return
+    now = time.time()
+    with _cache_lock:
+        _hot_symbols[sym] = now
+        # Keep this map bounded.
+        if len(_hot_symbols) > (MAX_HOT_SYMBOLS * 2):
+            stale_cutoff = now - HOT_SYMBOL_TTL_SECONDS
+            stale = [k for k, ts in _hot_symbols.items() if ts < stale_cutoff]
+            for k in stale:
+                _hot_symbols.pop(k, None)
+            if len(_hot_symbols) > MAX_HOT_SYMBOLS:
+                keep = sorted(_hot_symbols.items(), key=lambda kv: kv[1], reverse=True)[:MAX_HOT_SYMBOLS]
+                _hot_symbols.clear()
+                _hot_symbols.update(dict(keep))
+
+
+def get_hot_symbols(limit: int = 10) -> list[str]:
+    now = time.time()
+    with _cache_lock:
+        stale_cutoff = now - HOT_SYMBOL_TTL_SECONDS
+        for k in [k for k, ts in _hot_symbols.items() if ts < stale_cutoff]:
+            _hot_symbols.pop(k, None)
+        ordered = sorted(_hot_symbols.items(), key=lambda kv: kv[1], reverse=True)
+    return [k for k, _ in ordered[: max(1, limit)]]
+
+
+def _downsample_points(points: list[dict], max_points: int) -> list[dict]:
+    if len(points) <= max_points or max_points <= 0:
+        return points
+    # Uniform downsample while preserving first/last points.
+    step = (len(points) - 1) / (max_points - 1)
+    idxs = {0, len(points) - 1}
+    for i in range(1, max_points - 1):
+        idxs.add(int(round(i * step)))
+    return [points[i] for i in sorted(idxs)]
 
 
 # ── NSE API fetch ─────────────────────────────────────────────
@@ -253,6 +300,7 @@ def get_quote(symbol: str) -> Optional[dict]:
     symbol = symbol.upper().strip().replace(".NS", "").replace(".BO", "")
     if not _is_valid_symbol(symbol):
         return None
+    register_hot_symbol(symbol)
 
     now = time.time()
     with _cache_lock:
@@ -314,13 +362,14 @@ def get_bulk_quotes(symbols: list) -> dict:
 def get_historical(symbol: str, period: str = "1m") -> list:
     """
     Get historical price data for charting.
-    period: '1d' (5-min intraday), '1w' (hourly 5d), '1m' (daily 30d)
+    period: '1d', '1w', '1m', '5y', 'max'
     Returns: [{'time': str, 'price': float}, ...]
     Never raises — returns [] on failure.
     """
     symbol = symbol.upper().strip().replace(".NS", "").replace(".BO", "")
     if not _is_valid_symbol(symbol):
         return []
+    register_hot_symbol(symbol)
 
     cache_key = f"{symbol}_{period}"
     now = time.time()
@@ -344,11 +393,13 @@ def get_historical(symbol: str, period: str = "1m") -> list:
         "1d": ("1d",  "5m"),
         "1w": ("5d",  "60m"),
         "1m": ("1mo", "1d"),
+        "5y": ("5y",  "1d"),
+        "max": ("max", "1wk"),
     }
-    yf_period, interval = _period_map.get(period, ("1mo", "1d"))
+    _, interval = _period_map.get(period, ("1mo", "1d"))
 
     # Use direct Yahoo Finance chart API (avoids yfinance Brotli issues)
-    _range_map = {"1d": "1d", "1w": "5d", "1m": "1mo"}
+    _range_map = {"1d": "1d", "1w": "5d", "1m": "1mo", "5y": "5y", "max": "max"}
     yf_range = _range_map.get(period, "1mo")
     try:
         resp = _requests.get(
@@ -372,11 +423,25 @@ def get_historical(symbol: str, period: str = "1m") -> list:
                     continue
                 try:
                     t = datetime.datetime.fromtimestamp(ts, tz=_IST)
-                    label = t.strftime("%Y-%m-%dT%H:%M") if period == "1d" else str(t.date())
+                    if period == "1d":
+                        label = t.strftime("%Y-%m-%dT%H:%M")
+                    elif period == "1w":
+                        label = str(t.date())
+                    elif period == "1m":
+                        label = str(t.date())
+                    elif period == "5y":
+                        label = str(t.date())
+                    else:  # max
+                        label = str(t.date())
                     items.append({"time": label, "price": round(float(c), 2)})
                 except Exception:
                     continue
-            result = items
+            if period == "5y":
+                result = _downsample_points(items, max_points=1250)
+            elif period == "max":
+                result = _downsample_points(items, max_points=1500)
+            else:
+                result = items
     except Exception as e:
         print(f"[Historical] Error for {symbol} period={period}: {e}")
         result = []

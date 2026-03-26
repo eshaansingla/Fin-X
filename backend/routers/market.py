@@ -7,7 +7,9 @@ Market endpoints:
   GET /market/movers           — top gainers, losers, cheapest, most expensive
 """
 import time
-from fastapi import APIRouter
+import json
+import asyncio
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
@@ -16,6 +18,7 @@ router = APIRouter()
 _cache: dict = {}
 _CACHE_TTL_OPEN   =  5   # seconds — during market hours (aggressive refresh)
 _CACHE_TTL_CLOSED = 120  # seconds — after market close (stale is fine)
+_CHART_CACHE_TTL = 2     # short-lived cache for repeated chart requests
 
 # Broad NSE stock pool — 50 liquid stocks across sectors.
 # Large enough to always fill 10 gainers + 10 losers + cheapest + expensive.
@@ -59,7 +62,7 @@ def get_quick_price(symbol: str):
     """
     try:
         from services.symbol_resolver import normalize_symbol
-        from services.nse_service import get_quote
+        from services.nse_service import get_quote, register_hot_symbol
         from services.market_hours import market_status
 
         symbol = normalize_symbol(symbol)
@@ -69,6 +72,7 @@ def get_quick_price(symbol: str):
                 content={'success': False, 'data': None, 'error': 'Invalid symbol'},
             )
 
+        register_hot_symbol(symbol)
         status = market_status()
         quote  = get_quote(symbol)
 
@@ -114,7 +118,7 @@ def get_live_quote(symbol: str):
     """
     try:
         from services.symbol_resolver import normalize_symbol
-        from services.nse_service import get_quote, get_historical
+        from services.nse_service import get_quote, get_historical, register_hot_symbol
         from services.market_hours import market_status
         from concurrent.futures import ThreadPoolExecutor
 
@@ -125,6 +129,7 @@ def get_live_quote(symbol: str):
                 content={'success': False, 'data': None, 'error': 'Invalid symbol'},
             )
 
+        register_hot_symbol(symbol)
         # Parallel: quote + intraday (both are cache-first, so usually < 10 ms)
         with ThreadPoolExecutor(max_workers=2) as ex:
             f_quote    = ex.submit(get_quote,    symbol)
@@ -166,6 +171,113 @@ def get_live_quote(symbol: str):
 
     except Exception as e:
         print(f'[LiveQuote] Error for {symbol}: {e}')
+        return JSONResponse(
+            status_code=500,
+            content={'success': False, 'data': None, 'error': str(e)},
+        )
+
+
+@router.websocket('/market/ws/{symbol}')
+async def market_ws(symbol: str, websocket: WebSocket):
+    """
+    WebSocket stream for live quote + intraday updates.
+    Pushes every ~2 seconds, with cache-first internals for low latency.
+    """
+    await websocket.accept()
+    try:
+        from services.symbol_resolver import normalize_symbol
+        from services.nse_service import get_quote, get_historical, register_hot_symbol
+        from services.market_hours import market_status
+
+        norm = normalize_symbol(symbol)
+        if not norm:
+            await websocket.send_text(json.dumps({'success': False, 'error': 'Invalid symbol'}))
+            await websocket.close(code=1008)
+            return
+
+        while True:
+            register_hot_symbol(norm)
+            quote = await asyncio.to_thread(get_quote, norm)
+            intraday = await asyncio.to_thread(get_historical, norm, '1d')
+            status = market_status()
+
+            payload = {
+                'success': True,
+                'data': {
+                    'symbol': norm,
+                    'price': quote.get('price') if quote else None,
+                    'change': quote.get('change') if quote else None,
+                    'change_pct': quote.get('percent_change') if quote else None,
+                    'open': quote.get('open') if quote else None,
+                    'high': quote.get('high') if quote else None,
+                    'low': quote.get('low') if quote else None,
+                    'volume': quote.get('volume') if quote else None,
+                    'prev_close': quote.get('prev_close') if quote else None,
+                    'intraday': intraday or [],
+                    'market_open': status.get('is_open'),
+                    'time_ist': status.get('time_ist'),
+                    'date_ist': status.get('date_ist'),
+                },
+                'error': None,
+            }
+            await websocket.send_text(json.dumps(payload))
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
+
+@router.get('/market/chart/{symbol}')
+def get_chart(symbol: str, period: str = "1m"):
+    """
+    Historical chart endpoint for fast graph loading.
+    Supported periods: 1d, 1w, 1m, 5y, max
+    """
+    try:
+        from services.symbol_resolver import normalize_symbol
+        from services.nse_service import get_historical, register_hot_symbol
+        from services.market_hours import market_status
+
+        symbol = normalize_symbol(symbol)
+        if not symbol:
+            return JSONResponse(
+                status_code=400,
+                content={'success': False, 'data': None, 'error': 'Invalid symbol'},
+            )
+
+        p = (period or "1m").strip().lower()
+        allowed = {"1d", "1w", "1m", "5y", "max"}
+        if p not in allowed:
+            return JSONResponse(
+                status_code=400,
+                content={'success': False, 'data': None, 'error': f'Unsupported period: {period}'},
+            )
+
+        register_hot_symbol(symbol)
+        cache_key = f'chart:{symbol}:{p}'
+        cached = _cache.get(cache_key)
+        now = time.time()
+        if cached and (now - cached['ts']) < _CHART_CACHE_TTL:
+            return {'success': True, 'data': cached['data'], 'error': None}
+
+        points = get_historical(symbol, p)
+        status = market_status()
+        data = {
+            'symbol': symbol,
+            'period': p,
+            'points': points,
+            'count': len(points),
+            'market_open': status['is_open'],
+            'time_ist': status['time_ist'],
+            'date_ist': status['date_ist'],
+        }
+        _cache[cache_key] = {'data': data, 'ts': now}
+        return {'success': True, 'data': data, 'error': None}
+    except Exception as e:
         return JSONResponse(
             status_code=500,
             content={'success': False, 'data': None, 'error': str(e)},

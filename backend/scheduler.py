@@ -9,6 +9,7 @@ from typing import Dict, Any
 logging.basicConfig(level=logging.INFO)
 logger    = logging.getLogger('[Scheduler]')
 scheduler = BackgroundScheduler()
+_live_cursor = 0
 
 # Exposed to the frontend via `/api/health` for first-run seeding UX.
 _WARMUP_STATE: Dict[str, Any] = {
@@ -314,7 +315,7 @@ def prefetch_popular_stocks():
 def refresh_live_quotes():
     """
     Pre-warm the in-memory quote cache for all 50 movers symbols.
-    Runs every 10 seconds via APScheduler. No-op outside market hours.
+    Runs every 1-2 seconds via APScheduler. No-op outside market hours.
     Parallel fetch (ThreadPoolExecutor in get_bulk_quotes) keeps this fast.
     max_instances=1 prevents overlapping runs if NSE is slow.
     Also warms the intraday cache so /market/live and /market/price
@@ -324,13 +325,22 @@ def refresh_live_quotes():
         from services.market_hours import is_market_open
         if not is_market_open():
             return   # no-op outside market hours
-        from services.nse_service import get_bulk_quotes, get_historical
+        from services.nse_service import get_bulk_quotes, get_historical, get_hot_symbols
         from concurrent.futures import ThreadPoolExecutor
+        global _live_cursor
 
-        # Warm quote cache (parallel across all 50 symbols)
-        get_bulk_quotes(_LIVE_SYMBOLS)
+        hot = get_hot_symbols(limit=10)
+        # Round-robin through baseline symbols to avoid hitting all 50 every cycle.
+        chunk_size = 12
+        start = _live_cursor % len(_LIVE_SYMBOLS)
+        cold_chunk = [_LIVE_SYMBOLS[(start + i) % len(_LIVE_SYMBOLS)] for i in range(chunk_size)]
+        _live_cursor = (start + chunk_size) % len(_LIVE_SYMBOLS)
+        symbols_to_warm = list(dict.fromkeys(hot + cold_chunk))
 
-        # Warm intraday cache for the 10 most popular symbols (background)
+        # Warm quote cache for active symbols + rotating baseline set.
+        get_bulk_quotes(symbols_to_warm)
+
+        # Warm intraday cache for the hottest symbols first.
         def _warm_intraday(sym):
             try:
                 get_historical(sym, '1d')
@@ -338,10 +348,10 @@ def refresh_live_quotes():
                 pass
 
         with ThreadPoolExecutor(max_workers=5) as ex:
-            for sym in _LIVE_SYMBOLS[:10]:
+            for sym in symbols_to_warm[:10]:
                 ex.submit(_warm_intraday, sym)
 
-        logger.debug(f'[LiveQuotes] Cache warmed for {len(_LIVE_SYMBOLS)} symbols')
+        logger.debug(f'[LiveQuotes] Cache warmed for {len(symbols_to_warm)} symbols')
     except Exception as e:
         logger.warning(f'[LiveQuotes] Refresh error: {e}')
 
@@ -454,20 +464,23 @@ def start_scheduler():
         replace_existing = True,
     )
 
-    # Live quote cache warmer — all 50 movers symbols, every 10 s
+    live_refresh_seconds = max(1, int(os.getenv('LIVE_REFRESH_SECONDS', '2')))
+    movers_refresh_seconds = max(2, int(os.getenv('MOVERS_REFRESH_SECONDS', '3')))
+
+    # Live quote cache warmer — all 50 movers symbols
     scheduler.add_job(
         refresh_live_quotes,
-        trigger          = IntervalTrigger(seconds=10),
+        trigger          = IntervalTrigger(seconds=live_refresh_seconds),
         id               = 'live_quote_refresh',
         max_instances    = 1,
         replace_existing = True,
     )
 
-    # Movers cache pre-warmer — every 8 s during market hours
+    # Movers cache pre-warmer
     # Keeps /market/movers always served from in-memory cache (< 5 ms)
     scheduler.add_job(
         refresh_movers_cache,
-        trigger          = IntervalTrigger(seconds=8),
+        trigger          = IntervalTrigger(seconds=movers_refresh_seconds),
         id               = 'movers_cache_refresh',
         max_instances    = 1,
         replace_existing = True,

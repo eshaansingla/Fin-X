@@ -115,6 +115,10 @@ def init_db():
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             email         TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
+            is_verified   INTEGER NOT NULL DEFAULT 0,
+            verification_token TEXT,
+            verification_expires_at TEXT,
+            refresh_token_version INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT DEFAULT (datetime('now'))
         );
 
@@ -165,6 +169,28 @@ def init_db():
     # Migrate existing DB: add index for user-scoped chat sessions
     try:
         cur.execute('CREATE INDEX IF NOT EXISTS idx_chat_user_session ON chat_sessions(user_id, session_id)')
+    except Exception:
+        pass
+
+    # Migrate existing DB: add email verification columns
+    try:
+        cur.execute('ALTER TABLE users ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0')
+        print('[DB] Migrated: added is_verified column')
+    except Exception:
+        pass
+    try:
+        cur.execute('ALTER TABLE users ADD COLUMN verification_token TEXT')
+        print('[DB] Migrated: added verification_token column')
+    except Exception:
+        pass
+    try:
+        cur.execute('ALTER TABLE users ADD COLUMN verification_expires_at TEXT')
+        print('[DB] Migrated: added verification_expires_at column')
+    except Exception:
+        pass
+    try:
+        cur.execute('ALTER TABLE users ADD COLUMN refresh_token_version INTEGER NOT NULL DEFAULT 0')
+        print('[DB] Migrated: added refresh_token_version column')
     except Exception:
         pass
 

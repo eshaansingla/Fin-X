@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import SignalCard from '../components/SignalCard'
 import SearchBar from '../components/SearchBar'
-import { fetchSignalCard, fetchLiveQuote, fetchQuickPrice, fetchMarketStatus } from '../api'
+import { fetchSignalCard, fetchQuickPrice, fetchMarketStatus, fetchMarketChart, getMarketWsUrl } from '../api'
 import { RefreshCw, Wifi, Activity, Loader2 } from 'lucide-react'
 
 const POPULAR = [
@@ -10,8 +10,8 @@ const POPULAR = [
   'WIPRO', 'BAJFINANCE', 'SUNPHARMA', 'ITC',
 ]
 
-const TREND_KEYS  = { '1D': '1d', '1W': '1w', '1M': '1m' }
-const TREND_LABEL = { '1D': 'Intraday', '1W': '5 Days', '1M': '30 Days' }
+const TREND_KEYS  = { '1D': '1d', '1W': '1w', '1M': '1m', '5Y': '5y', 'ALL': 'max' }
+const TREND_LABEL = { '1D': 'Intraday', '1W': '5 Days', '1M': '30 Days', '5Y': '5 Years', 'ALL': 'All Time' }
 
 // ── Module-level card cache (survives re-renders, resets on hard reload) ──
 // Keyed by symbol. TTL 5 min — ensures returning to a stock is instant.
@@ -26,14 +26,19 @@ function _getCached(sym) {
 }
 
 // ── Trend Chart ──────────────────────────────────────────────
-function TrendChart({ trends, liveIntraday, marketOpen }) {
+function TrendChart({ symbol, trends, liveIntraday, marketOpen }) {
   const [tab, setTab] = useState('1D')
+  const [fetched, setFetched] = useState({})
+  const [loadingTab, setLoadingTab] = useState(false)
   if (!trends) return null
 
-  const raw =
-    tab === '1D' && marketOpen && liveIntraday?.length >= 2
+  const key = TREND_KEYS[tab]
+  const liveOrStored =
+    tab === '1D' && liveIntraday?.length >= 2
       ? liveIntraday
-      : trends[TREND_KEYS[tab]] || []
+      : (fetched[key] || trends[key] || [])
+
+  const raw = liveOrStored
 
   const data    = raw.map(d => ({ ...d, price: Number(d.price) }))
   const hasData = data.length >= 2
@@ -65,6 +70,28 @@ function TrendChart({ trends, liveIntraday, marketOpen }) {
     return d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  useEffect(() => {
+    let cancelled = false
+    const loadTab = async () => {
+      if (!symbol) return
+      const current = liveOrStored || []
+      if (current.length >= 2) return
+      try {
+        setLoadingTab(true)
+        const data = await fetchMarketChart(symbol, key)
+        if (cancelled) return
+        const points = data?.points || []
+        setFetched(prev => ({ ...prev, [key]: points }))
+      } catch {
+        // keep existing data if fetch fails
+      } finally {
+        if (!cancelled) setLoadingTab(false)
+      }
+    }
+    loadTab()
+    return () => { cancelled = true }
+  }, [symbol, key]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm dark:shadow-lg">
       <div className="flex items-center justify-between mb-3">
@@ -77,6 +104,9 @@ function TrendChart({ trends, liveIntraday, marketOpen }) {
                 LIVE
               </span>
             )}
+            {loadingTab && (
+              <span className="text-[10px] text-blue-500">loading...</span>
+            )}
           </div>
           {hasData && pctMove !== null && (
             <p className={`text-xs font-semibold mt-0.5 ${isUp ? 'text-green-600 dark:text-green-500' : 'text-red-600 dark:text-red-500'}`}>
@@ -85,7 +115,7 @@ function TrendChart({ trends, liveIntraday, marketOpen }) {
           )}
         </div>
         <div className="flex gap-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 border border-gray-200 dark:border-gray-700">
-          {['1D', '1W', '1M'].map(t => (
+          {['1D', '1W', '1M', '5Y', 'ALL'].map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -239,7 +269,7 @@ export default function CardPage({ initialSym = '' }) {
   const [timeIST,    setTime]   = useState('')
 
   const cardPollRef  = useRef(null)
-  const livePollRef  = useRef(null)
+  const wsRef        = useRef(null)
   const marketRef    = useRef(null)
   // Tracks which symbol is currently "wanted" — stale responses are discarded
   const activeSymRef = useRef('')
@@ -292,19 +322,47 @@ export default function CardPage({ initialSym = '' }) {
     }
   }, [])
 
-  // ── Background live-price poll (price + intraday chart) ───
-  const fetchLive = useCallback(async (ticker) => {
-    if (!ticker) return
+  const stopWs = useCallback(() => {
     try {
-      const data = await fetchLiveQuote(ticker)
-      if (activeSymRef.current !== ticker) return
-      setLive(data)
-      setMarket(data.market_open ?? false)
-      setTime(data.time_ist ?? '')
+      if (wsRef.current) {
+        wsRef.current.onopen = null
+        wsRef.current.onmessage = null
+        wsRef.current.onerror = null
+        wsRef.current.onclose = null
+        wsRef.current.close()
+      }
     } catch {
-      // silent — keep last value
+      // ignore
+    } finally {
+      wsRef.current = null
     }
   }, [])
+
+  const startWs = useCallback((ticker) => {
+    if (!ticker) return
+    stopWs()
+    try {
+      const ws = new window.WebSocket(getMarketWsUrl(ticker))
+      wsRef.current = ws
+      ws.onmessage = (evt) => {
+        try {
+          const payload = JSON.parse(evt.data || '{}')
+          if (!payload?.success || !payload?.data) return
+          if (activeSymRef.current !== ticker) return
+          const d = payload.data
+          setLive(d)
+          setMarket(d.market_open ?? false)
+          setTime(d.time_ist ?? '')
+        } catch {
+          // ignore malformed frame
+        }
+      }
+    } catch {
+      // silent: quick price + card data still render
+    }
+  }, [stopWs])
+
+  useEffect(() => () => stopWs(), [stopWs])
 
   // ── Market status poll (60 s) ─────────────────────────────
   const checkMarket = useCallback(async () => {
@@ -325,7 +383,7 @@ export default function CardPage({ initialSym = '' }) {
   useEffect(() => {
     if (initialSym) {
       clearInterval(cardPollRef.current)
-      clearInterval(livePollRef.current)
+      stopWs()
       activeSymRef.current = initialSym
       setSym(initialSym)
       setLive(null)
@@ -339,27 +397,9 @@ export default function CardPage({ initialSym = '' }) {
         fetchQuick(initialSym)   // fast path: price tile in < 200 ms
       }
       loadCard(initialSym, false)
+      startWs(initialSym)
     }
-  }, [initialSym, loadCard, fetchQuick])
-
-  // Live price poll: 4 s when open, 30 s when closed
-  useEffect(() => {
-    if (!sym) return
-    clearInterval(livePollRef.current)
-    fetchLive(sym)
-    const interval = marketOpen ? 4_000 : 30_000
-    livePollRef.current = setInterval(() => fetchLive(sym), interval)
-    return () => clearInterval(livePollRef.current)
-  }, [sym, marketOpen, fetchLive])
-
-  // Adjust poll interval when market status flips
-  useEffect(() => {
-    if (!sym) return
-    clearInterval(livePollRef.current)
-    const interval = marketOpen ? 4_000 : 30_000
-    livePollRef.current = setInterval(() => fetchLive(sym), interval)
-    return () => clearInterval(livePollRef.current)
-  }, [marketOpen, sym, fetchLive])
+  }, [initialSym, loadCard, fetchQuick, startWs, stopWs])
 
   // Full-card silent refresh every 5 min (cache-served — no force refresh)
   useEffect(() => {
@@ -381,7 +421,7 @@ export default function CardPage({ initialSym = '' }) {
   const handleSelect = (ticker) => {
     if (!ticker) return
     clearInterval(cardPollRef.current)
-    clearInterval(livePollRef.current)
+    stopWs()
 
     activeSymRef.current = ticker
     setSym(ticker)
@@ -400,6 +440,7 @@ export default function CardPage({ initialSym = '' }) {
       fetchQuick(ticker)   // fast path — price shows in < 200 ms
     }
     loadCard(ticker, false)
+    startWs(ticker)
   }
 
   // Merge live overlay into display card (price + OHLCV only)
@@ -514,6 +555,7 @@ export default function CardPage({ initialSym = '' }) {
             </div>
           )}
           <TrendChart
+            symbol={sym}
             trends={card.trends}
             liveIntraday={liveData?.intraday}
             marketOpen={marketOpen}

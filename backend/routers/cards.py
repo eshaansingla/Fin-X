@@ -125,6 +125,14 @@ def _fetch_intraday(symbol: str) -> list:
         return []
 
 
+def _fetch_history(symbol: str, period: str) -> list:
+    try:
+        return get_historical(symbol, period) or []
+    except Exception as e:
+        print(f'[Cards] History error for {symbol} period={period}: {e}')
+        return []
+
+
 @router.get('/card/{symbol}')
 def get_signal_card(symbol: str, force_refresh: bool = False):
     """
@@ -159,18 +167,22 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
         except Exception as e:
             print(f'[Cards] Cache read error for {symbol}: {e}')
 
-    # ── Parallel fetch: yfinance + NSE quote + news + intraday ─
+    # ── Parallel fetch: yfinance + NSE quote + news + intraday + long-range history ─
     # All 4 sources run concurrently — reduces wall time from ~sum to ~max
     stock_data   = {'symbol': symbol}
     nse_quote    = {}
     news         = []
     intraday     = []
+    hist_5y      = []
+    hist_max     = []
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         f_yf       = ex.submit(_fetch_yfinance,  symbol)
         f_quote    = ex.submit(_fetch_nse_quote, symbol)
         f_news     = ex.submit(_fetch_news,      symbol)
         f_intraday = ex.submit(_fetch_intraday,  symbol)
+        f_5y       = ex.submit(_fetch_history,   symbol, '5y')
+        f_max      = ex.submit(_fetch_history,   symbol, 'max')
 
         # Collect each independently — one slow/failed source doesn't block others
         try:
@@ -193,6 +205,16 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
         except Exception as e:
             print(f'[Cards] Intraday timeout/error for {symbol}: {e}')
             intraday = []
+        try:
+            hist_5y    = f_5y.result(timeout=12)
+        except Exception as e:
+            print(f'[Cards] 5Y history timeout/error for {symbol}: {e}')
+            hist_5y = []
+        try:
+            hist_max   = f_max.result(timeout=14)
+        except Exception as e:
+            print(f'[Cards] Max history timeout/error for {symbol}: {e}')
+            hist_max = []
 
     # ── Merge NSE live quote over yfinance data ───────────────
     if nse_quote:
@@ -271,9 +293,10 @@ def get_signal_card(symbol: str, force_refresh: bool = False):
     trends = {
         '1m': [{'time': d, 'price': p} for d, p in zip(dates, prices)],
         '1w': [{'time': d, 'price': p} for d, p in zip(dates[-7:], prices[-7:])],
-        '1d': intraday if len(intraday) >= 2 else [
-            {'time': d, 'price': p} for d, p in zip(dates[-5:], prices[-5:])
-        ],
+        # Keep 1D strictly intraday to avoid showing week-like x-axis under 1D tab.
+        '1d': intraday if len(intraday) >= 2 else [],
+        '5y': hist_5y,
+        'max': hist_max,
     }
     card['trends'] = trends
 
