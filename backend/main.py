@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 import os
 from dotenv import load_dotenv
 from database import init_db
@@ -10,6 +11,8 @@ from routers import search as search_router
 from routers import market as market_router
 from routers import inshorts as inshorts_router
 from scheduler import start_scheduler
+from core.db import init_auth_db
+from routes.auth import router as v2_auth_router
 
 load_dotenv(override=True)
 
@@ -17,6 +20,7 @@ load_dotenv(override=True)
 async def lifespan(app: FastAPI):
     # Startup
     init_db()
+    init_auth_db()
     start_scheduler()
     print('[FIN-X] Server ready — API docs at /docs')
     yield
@@ -43,6 +47,12 @@ app.add_middleware(
     allow_headers     = ['*'],
 )
 
+# Session middleware — required by Google OAuth (authlib starlette client)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv('JWT_SECRET_KEY', 'dev-secret-change-me-in-production'),
+)
+
 # Mount all routers under /api prefix
 app.include_router(health.router,        prefix='/api', tags=['Health'])
 app.include_router(signals.router,       prefix='/api', tags=['Signals'])
@@ -53,6 +63,7 @@ app.include_router(portfolio.router,     prefix='/api', tags=['Portfolio'])
 app.include_router(search_router.router, prefix='/api', tags=['Search'])
 app.include_router(market_router.router, prefix='/api', tags=['Market'])
 app.include_router(inshorts_router.router, prefix='/api', tags=['Inshorts'])
+app.include_router(v2_auth_router,          prefix='/api/v2', tags=['Auth v2'])
 
 # Analytics + Audio endpoints
 try:

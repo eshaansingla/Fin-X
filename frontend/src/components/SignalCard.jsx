@@ -60,13 +60,15 @@ function StatBox({ label, value, cls = '' }) {
 }
 
 export default function SignalCard({ card }) {
-  const [winRate, setWinRate] = useState(null)
+  const [winRate, setWinRate] = useState(null) // { pct, n } | null
 
   useEffect(() => {
     if (!card?.symbol) return
     fetch(`${API_BASE}/analytics/success-rate/${card.symbol}?signal_type=${encodeURIComponent(card.ema_signal || 'EMA Crossover')}`)
       .then(r => r.json())
-      .then(d => { if (d.win_rate != null) setWinRate(d.win_rate) })
+      .then(d => {
+        if (d.win_rate != null) setWinRate({ pct: d.win_rate, n: d.occurrences ?? null })
+      })
       .catch(() => {})
   }, [card?.symbol, card?.ema_signal])
 
@@ -82,8 +84,11 @@ export default function SignalCard({ card }) {
       {/* Win rate badge */}
       {winRate != null && (
         <div className="absolute top-4 right-4 bg-gradient-to-r from-indigo-600 to-purple-600
-          text-white text-xs font-bold px-2.5 py-1 rounded-full shadow border border-purple-500/30">
-          ★ {winRate}% Win
+          text-white text-xs font-bold px-2.5 py-1 rounded-full shadow border border-purple-500/30 flex items-center gap-1">
+          ★ {winRate.pct}% Win
+          {winRate.n != null && winRate.n > 0 && (
+            <span className="opacity-70 font-normal">· {winRate.n} signals</span>
+          )}
         </div>
       )}
 

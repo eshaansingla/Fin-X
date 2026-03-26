@@ -8,12 +8,17 @@ import ChatPage from './pages/ChatPage'
 import InshortsPage from './pages/InshortsPage'
 import MarketWrapButton from './components/MarketWrapButton'
 import WarmupBanner from './components/WarmupBanner'
-import AuthPage from './pages/AuthPage'
+import LandingPage from './pages/LandingPage'
 
 function AppInner() {
-  const { isAuthed, logout } = useAuth()
-  const [page, setPage]           = useState('radar')
+  const { isAuthed } = useAuth()
+  const [page, setPage]            = useState('radar')
   const [selectedSym, setSelected] = useState('')
+
+  // Show landing page for unauthenticated users
+  if (!isAuthed) {
+    return <LandingPage onAuthed={() => setPage('radar')} />
+  }
 
   const handleSelectStock = (symbol) => {
     setSelected(symbol)
@@ -21,10 +26,6 @@ function AppInner() {
   }
 
   const handleNav = (id) => {
-    if (id === 'chat' && !isAuthed) {
-      setPage('auth')
-      return
-    }
     setPage(id)
   }
 
@@ -35,17 +36,10 @@ function AppInner() {
         <WarmupBanner />
       </div>
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6">
-        {page === 'radar' && <RadarPage onSelectStock={handleSelectStock} />}
-        {page === 'card'  && <CardPage initialSym={selectedSym} />}
-        {page === 'chat'  && <ChatPage />}
+        {page === 'radar'    && <RadarPage onSelectStock={handleSelectStock} />}
+        {page === 'card'     && <CardPage initialSym={selectedSym} />}
+        {page === 'chat'     && <ChatPage />}
         {page === 'inshorts' && <InshortsPage onSelectStock={handleSelectStock} />}
-        {page === 'auth' && (
-          <AuthPage
-            onAuthed={() => {
-              if (page === 'auth') setPage('chat')
-            }}
-          />
-        )}
       </main>
       <MarketWrapButton />
       <footer className="text-center text-xs text-gray-400 dark:text-gray-600 py-3 border-t border-gray-200 dark:border-gray-900">

@@ -1,6 +1,7 @@
 # backend/services/advanced_analytics.py
 import yfinance as yf
 import pandas as pd
+import time as _time
 from datetime import datetime, timedelta
 import json
 from services.indicators import add_ns_suffix, compute_rsi_manual
@@ -9,58 +10,97 @@ from services.gpt import gemini_call, load_prompt, parse_json_response
 from database import db_fetchall
 
 SECTORS = {
-    "RELIANCE": "Energy", "TCS": "IT", "INFY": "IT", "HDFCBANK": "Finance",
-    "ICICIBANK": "Finance", "TATAMOTORS": "Auto", "WIPRO": "IT", "BAJFINANCE": "Finance",
-    "SUNPHARMA": "Pharma", "ITC": "FMCG", "SBIN": "Finance", "ADANIENT": "Infrastructure",
-    "MARUTI": "Auto", "NESTLEIND": "FMCG", "POWERGRID": "Energy"
+    "RELIANCE": "Energy", "TCS": "IT", "INFY": "IT", "HDFCBANK": "Banking",
+    "ICICIBANK": "Banking", "TATAMOTORS": "Auto", "WIPRO": "IT", "BAJFINANCE": "NBFC",
+    "SUNPHARMA": "Pharma", "ITC": "FMCG", "SBIN": "Banking", "ADANIENT": "Infrastructure",
+    "MARUTI": "Auto", "NESTLEIND": "FMCG", "POWERGRID": "Energy",
+    # Extended
+    "AXISBANK": "Banking", "KOTAKBANK": "Banking", "INDUSINDBK": "Banking",
+    "HCLTECH": "IT", "TECHM": "IT", "LTIM": "IT", "MPHASIS": "IT",
+    "DRREDDY": "Pharma", "CIPLA": "Pharma", "DIVISLAB": "Pharma", "LUPIN": "Pharma",
+    "BAJAJFINSV": "NBFC", "MUTHOOTFIN": "NBFC", "CHOLAFIN": "NBFC",
+    "NTPC": "Energy", "ONGC": "Energy", "BPCL": "Energy", "IOC": "Energy",
+    "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals", "COALINDIA": "Metals",
+    "HINDUNILVR": "FMCG", "BRITANNIA": "FMCG", "DABUR": "FMCG", "MARICO": "FMCG",
+    "ULTRACEMCO": "Cement", "SHREECEM": "Cement", "AMBUJACEM": "Cement",
+    "BHARTIARTL": "Telecom", "TITAN": "Consumer", "ASIANPAINT": "Paints",
+    "LT": "Infrastructure", "ADANIPORTS": "Infrastructure",
+    "APOLLOHOSP": "Healthcare", "DIVISLAB": "Pharma",
+    "SBILIFE": "Insurance", "HDFCLIFE": "Insurance",
+    "EICHERMOT": "Auto", "HEROMOTOCO": "Auto", "BAJAJ-AUTO": "Auto",
 }
+
+# ── In-memory backtest cache (24 h TTL) ───────────────────────────────────────
+_backtest_cache: dict = {}
+_BACKTEST_CACHE_TTL = 24 * 3600  # seconds
+
+
+def _cache_get(key: str):
+    entry = _backtest_cache.get(key)
+    if entry and (_time.time() - entry["ts"]) < _BACKTEST_CACHE_TTL:
+        return entry["result"]
+    return None
+
+
+def _cache_set(key: str, result: dict):
+    _backtest_cache[key] = {"result": result, "ts": _time.time()}
+
 
 def get_pattern_success_rate(symbol: str, signal_type: str) -> dict:
     """
     Back-tests a signal over 2 years of daily data.
     Returns the % of times the stock was higher 5 days after the signal triggered.
+    Results are cached in-memory for 24 hours so demo clicks are instant.
     """
+    cache_key = f"{symbol.upper()}:{signal_type}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     ns_symbol = add_ns_suffix(symbol)
     try:
         ticker = yf.Ticker(ns_symbol)
         hist = ticker.history(period="2y")
         if hist.empty:
-            return {"error": "No data found", "symbol": symbol}
-        
+            result = {"error": "No data found", "symbol": symbol, "win_rate": None, "occurrences": 0}
+            _cache_set(cache_key, result)
+            return result
+
         close = hist["Close"]
         occurrences = 0
         successes = 0
-        
-        # Calculate indicators needed for backtesting
+
         if signal_type.lower() == "rsi < 30":
             rsi = compute_rsi_manual(close, 14)
             for i in range(14, len(rsi) - 5):
-                # Triggered when RSI dips below 30
-                if rsi.iloc[i-1] >= 30 and rsi.iloc[i] < 30:
+                if rsi.iloc[i - 1] >= 30 and rsi.iloc[i] < 30:
                     occurrences += 1
-                    # Check price 5 days later
-                    if close.iloc[i+5] > close.iloc[i]:
+                    if close.iloc[i + 5] > close.iloc[i]:
                         successes += 1
-        else: # Default behavior: just look for generic bullish crossovers (EMA 20 > EMA 50)
+        else:
             ema20 = close.ewm(span=20, adjust=False).mean()
             ema50 = close.ewm(span=50, adjust=False).mean()
             for i in range(50, len(close) - 5):
-                if ema20.iloc[i-1] <= ema50.iloc[i-1] and ema20.iloc[i] > ema50.iloc[i]:
+                if ema20.iloc[i - 1] <= ema50.iloc[i - 1] and ema20.iloc[i] > ema50.iloc[i]:
                     occurrences += 1
-                    if close.iloc[i+5] > close.iloc[i]:
+                    if close.iloc[i + 5] > close.iloc[i]:
                         successes += 1
-        
+
         win_rate = (successes / occurrences * 100) if occurrences > 0 else 0
-        return {
+        result = {
             "symbol": symbol,
             "signal_type": signal_type,
             "occurrences": occurrences,
             "win_rate": round(win_rate, 2),
-            "successes": successes
+            "successes": successes,
         }
+        _cache_set(cache_key, result)
+        return result
     except Exception as e:
         print(f"[Analytics] Error in get_pattern_success_rate for {symbol}: {e}")
-        return {"error": str(e), "symbol": symbol, "win_rate": None}
+        result = {"error": str(e), "symbol": symbol, "win_rate": None, "occurrences": 0}
+        _cache_set(cache_key, result)
+        return result
 
 def get_institutional_clusters() -> dict:
     """

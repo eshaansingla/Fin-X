@@ -1,16 +1,49 @@
-**pycache**/
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# ── Virtual environments ──────────────────────────────────────────────────────
 venv/
 env/
 .venv/
-.env
-backend/__pycache__/
-backend/*.pyc
-backend/.env
-backend/data/
 backend/venv/
-.claude/
-frontend/node_modules/
-frontend/dist/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+backend/.env
+*.env.local
+*.env.*.local
+
+# ── Database files ────────────────────────────────────────────────────────────
 *.db
 *.sqlite
+*.sqlite3
+backend/data/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+backend/logs/
+backend/server.log
+
+# ── Pip garbage (created by shell redirection during pip install) ─────────────
+backend/=*
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/

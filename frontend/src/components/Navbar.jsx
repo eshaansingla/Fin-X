@@ -1,15 +1,17 @@
-import { Activity, BarChart2, MessageSquare, Newspaper, Sun, Moon } from 'lucide-react'
+import { Activity, BarChart2, MessageSquare, Newspaper, Sun, Moon, LogOut } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
+import { useAuth } from '../context/AuthContext'
 
 const TABS = [
-  { id: 'radar', label: 'Radar',       icon: Activity },
-  { id: 'card',  label: 'Signal Card', icon: BarChart2 },
-  { id: 'inshorts', label: 'Inshorts', icon: Newspaper },
-  { id: 'chat',  label: 'Market Chat', icon: MessageSquare },
+  { id: 'radar',    label: 'Radar',       icon: Activity },
+  { id: 'card',     label: 'Signal Card', icon: BarChart2 },
+  { id: 'inshorts', label: 'Inshorts',    icon: Newspaper },
+  { id: 'chat',     label: 'Market Chat', icon: MessageSquare },
 ]
 
 export default function Navbar({ active, onNav }) {
   const { dark, toggle } = useTheme()
+  const { user, logout } = useAuth()
 
   return (
     <nav className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-50 shadow-sm">
@@ -17,7 +19,7 @@ export default function Navbar({ active, onNav }) {
 
         {/* Logo */}
         <div className="flex items-center gap-2.5 flex-shrink-0">
-          <div className="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center shadow-md">
+          <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-violet-600 rounded-xl flex items-center justify-center shadow-md">
             <span className="text-white text-xs font-extrabold tracking-tight">FX</span>
           </div>
           <div className="flex items-center gap-2">
@@ -46,19 +48,33 @@ export default function Navbar({ active, onNav }) {
           ))}
         </div>
 
-        {/* Theme toggle */}
-        <button
-          onClick={toggle}
-          title={dark ? 'Switch to Light mode' : 'Switch to Dark mode'}
-          className="flex-shrink-0 p-2 rounded-lg text-gray-500 dark:text-gray-400
-            hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800
-            transition-colors duration-150"
-        >
-          {dark
-            ? <Sun  className="w-4 h-4" />
-            : <Moon className="w-4 h-4" />
-          }
-        </button>
+        {/* Right controls */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* User email pill */}
+          {user?.email && (
+            <span className="hidden lg:inline text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-2.5 py-1 rounded-full border border-gray-200 dark:border-gray-700 max-w-[140px] truncate">
+              {user.email}
+            </span>
+          )}
+
+          {/* Theme toggle */}
+          <button
+            onClick={toggle}
+            title={dark ? 'Switch to Light mode' : 'Switch to Dark mode'}
+            className="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors duration-150"
+          >
+            {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+
+          {/* Logout */}
+          <button
+            onClick={logout}
+            title="Log out"
+            className="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors duration-150"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </nav>
   )
