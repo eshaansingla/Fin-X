@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     # ── Google OAuth ─────────────────────────────────────────
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v2/auth/google/callback"
+    # In local dev, the frontend runs on :5173 and proxies /api -> :8000.
+    # Using a :5173 redirect keeps the auth session cookie on the same origin.
+    GOOGLE_REDIRECT_URI: str = "http://localhost:5173/api/v2/auth/google/callback"
 
 
 settings = Settings()

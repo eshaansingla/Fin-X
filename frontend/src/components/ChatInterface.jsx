@@ -2,6 +2,11 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, Bot, User, Trash2, Loader2, Sparkles } from 'lucide-react'
 import { sendChatMessage, clearChat } from '../api'
 
+const isHeadingLine = (line) =>
+  line.startsWith('**') ||           // markdown bold (older responses)
+  /^[\u{1D400}-\u{1D7FF}]/u.test(line); // unicode bold letters
+
+
 const QUICK = [
   'Why is Nifty moving today?',
   'What are bulk deals and why do they matter?',
@@ -24,7 +29,7 @@ function Msg({ role, content }) {
         ${isUser ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-700'}`}>
         {isUser
           ? <User className="w-4 h-4 text-white" />
-          : <Bot  className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          : <Bot className="w-4 h-4 text-blue-600 dark:text-blue-400" />
         }
       </div>
       <div className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap shadow-sm
@@ -32,7 +37,21 @@ function Msg({ role, content }) {
           ? 'bg-blue-600 text-white rounded-tr-sm'
           : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-tl-sm border border-gray-200 dark:border-gray-700/50'
         }`}>
-        {content}
+        {content.split('\n').map((ln, i) => {
+          const trimmed = ln.trim()
+          if (!trimmed) return <div key={i} style={{ height: 4 }} />
+          const heading = isHeadingLine(trimmed)
+          const text = trimmed.replace(/^\*+\s*/, '').replace(/^\**(.*?)\**$/, '$1')
+          return (
+            <div
+              key={i}
+              className={heading ? 'text-sm font-bold' : 'text-xs'}
+              style={heading ? { fontSize: '0.95rem' } : {}}
+            >
+              {text}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -56,12 +75,12 @@ function Typing() {
 }
 
 export default function ChatInterface() {
-  const [msgs, setMsgs]         = useState([WELCOME])
-  const [input, setInput]       = useState('')
-  const [loading, setLoading]   = useState(false)
+  const [msgs, setMsgs] = useState([WELCOME])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
   const [sessionId, setSession] = useState(null)
-  const bottomRef               = useRef(null)
-  const inputRef                = useRef(null)
+  const bottomRef = useRef(null)
+  const inputRef = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -86,7 +105,7 @@ export default function ChatInterface() {
   }
 
   const handleClear = async () => {
-    if (sessionId) await clearChat(sessionId).catch(() => {})
+    if (sessionId) await clearChat(sessionId).catch(() => { })
     setMsgs([WELCOME])
     setSession(null)
   }

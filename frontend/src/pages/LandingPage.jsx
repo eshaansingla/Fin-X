@@ -51,7 +51,7 @@ const STATS = [
 
 const TRUST = [
   'NSE bulk & block deal data',
-  'Gemini 2.5 Flash + GPT-4o fallback',
+  'Groq (Llama-3.3-70b-versatile)',
   'Backtested signal win rates',
   'Educational use — no SEBI advice',
 ]

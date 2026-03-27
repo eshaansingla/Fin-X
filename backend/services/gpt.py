@@ -6,23 +6,33 @@ load_dotenv(override=True)
 from database import db_fetchall, db_fetchone, db_execute
 
 # ── API keys ─────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+LLAMA_API_KEY = os.getenv("LLAMA_API_KEY", "").strip()
 
-if not GEMINI_API_KEY:
-    print('[WARN] GEMINI_API_KEY missing — Gemini calls will use OpenAI fallback or return stub responses')
+# Provider defaults:
+# - OpenRouter: https://openrouter.ai/api/v1, key typically starts with "sk-or-"
+# - Groq (OpenAI-compatible): https://api.groq.com/openai/v1, key typically starts with "gsk_"
+_env_base = os.getenv("LLAMA_BASE_URL", "").strip()
+_env_model = os.getenv("LLAMA_MODEL", "").strip()
 
-# Only configure Gemini if key present
-_genai = None
-try:
-    if GEMINI_API_KEY:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        _genai = genai
-except Exception as e:
-    print(f'[WARN] Gemini configure error: {e}')
+if not _env_base:
+    if LLAMA_API_KEY.startswith("gsk_"):
+        LLAMA_BASE_URL = "https://api.groq.com/openai/v1"
+    else:
+        LLAMA_BASE_URL = "https://openrouter.ai/api/v1"
+else:
+    LLAMA_BASE_URL = _env_base
 
-MODEL_NAME = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-lite')
+if not _env_model:
+    # Sensible defaults per provider
+    if "groq.com" in LLAMA_BASE_URL:
+        LLAMA_MODEL = "llama-3.3-70b-versatile"
+    else:
+        LLAMA_MODEL = "meta-llama/llama-3.3-70b-instruct"
+else:
+    LLAMA_MODEL = _env_model
+
+# Kept as fallback only (if LLAMA_API_KEY isn't set)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
 # Gemini free-tier quota management (default values from project notes).
 GEMINI_DAILY_LIMIT = int(os.getenv('GEMINI_DAILY_LIMIT', '20'))
@@ -126,7 +136,57 @@ def _openai_chat(messages: list, last_content: str) -> str:
         print(f'[OpenAI Chat] Error: {e}')
         return 'I am having trouble connecting right now. Please check NSE India and ET Markets directly.'
 
-# ── Core Gemini call with retry + backoff ────────────────────
+# ── Llama 3.3 70B (OpenAI-compatible) ────────────────────────
+def _llama_generate(prompt: str, max_tokens: int = 1024, temperature: float = 0.3) -> str:
+    """
+    Calls Llama-3.3-70B via an OpenAI-compatible endpoint.
+    Defaults to OpenRouter; override with LLAMA_BASE_URL/LLAMA_MODEL.
+    """
+    if not LLAMA_API_KEY:
+        # Keep existing behavior: if Llama key isn't configured, use existing OpenAI fallback.
+        return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=LLAMA_API_KEY, base_url=LLAMA_BASE_URL, timeout=15)
+        resp = client.chat.completions.create(
+            model=LLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"[Llama] Error: {e}")
+        # Preserve resilience: fall back to existing OpenAI key if present.
+        return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
+
+
+def _llama_chat(messages: list, last_content: str) -> str:
+    if not LLAMA_API_KEY:
+        return _openai_chat(messages, last_content)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=LLAMA_API_KEY, base_url=LLAMA_BASE_URL, timeout=15)
+        oai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for m in messages[:-1]:
+            oai_messages.append({"role": m["role"], "content": m["content"]})
+        oai_messages.append({"role": "user", "content": last_content})
+        resp = client.chat.completions.create(
+            model=LLAMA_MODEL,
+            messages=oai_messages,
+            max_tokens=800,
+            temperature=0.4,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"[Llama Chat] Error: {e}")
+        return _openai_chat(messages, last_content)
+
+
+# ── Legacy name kept for compatibility ───────────────────────
 def gemini_call(
     prompt:       str,
     json_mode:    bool = False,
@@ -134,54 +194,11 @@ def gemini_call(
     temperature:  float = 0.3,
 ) -> str:
     """
-    Core Gemini call with 3-attempt retry + exponential backoff.
-    Falls back to OpenAI if Gemini key is missing.
+    Kept function name for compatibility across the codebase.
+    Now uses Llama-3.3-70B (OpenAI-compatible). Falls back to OpenAI if needed.
     """
-    if not _genai:
-        print('[Gemini] Not configured — using OpenAI fallback')
-        return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
-
-    # Gemini quota management: avoid near-exhaustion by switching to OpenAI.
-    try:
-        used_calls = _get_gemini_call_count_today()
-        if used_calls >= GEMINI_NEAR_THRESHOLD or used_calls >= GEMINI_DAILY_LIMIT:
-            # OpenAI is the "safe" path when Gemini is near exhaustion.
-            return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
-        # Count the Gemini call before execution (best-effort).
-        _increment_gemini_call_count_today()
-    except Exception:
-        pass
-
-    generation_config = _genai.types.GenerationConfig(
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-        **({"response_mime_type": "application/json"} if json_mode else {}),
-    )
-
-    model = _genai.GenerativeModel(
-        model_name=MODEL_NAME,
-        system_instruction=SYSTEM_PROMPT,
-        generation_config=generation_config,
-    )
-
-    for attempt in range(3):
-        try:
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            err_msg = str(e)
-            print(f'[Gemini] Attempt {attempt + 1} failed: {err_msg}')
-            if attempt == 2:
-                # Final attempt failed — try OpenAI fallback
-                print('[Gemini] All retries exhausted — trying OpenAI fallback')
-                try:
-                    return _openai_generate(prompt, max_tokens=max_tokens, temperature=temperature)
-                except Exception:
-                    raise
-            sleep_secs = 2 ** (attempt + 1)
-            print(f'[Gemini] Retrying in {sleep_secs}s...')
-            time.sleep(sleep_secs)
-    return ''
+    # json_mode is best-effort (depends on provider support). We keep it for callers.
+    return _llama_generate(prompt, max_tokens=max_tokens, temperature=temperature)
 
 # ── Safe JSON parser ─────────────────────────────────────────
 def parse_json_response(text: str, fallback: dict = None) -> dict:
@@ -417,7 +434,7 @@ def generate_signal_card(symbol: str, stock_data: dict, news: list) -> dict:
 
 def chat_response(messages: list) -> str:
     """
-    Multi-turn chat using Gemini (preferred) or OpenAI fallback.
+    Multi-turn chat using Llama (preferred) or OpenAI fallback.
     Never crashes — returns a safe fallback string on all failures.
     """
     context  = build_chat_context()
@@ -430,48 +447,86 @@ def chat_response(messages: list) -> str:
     stock_context = _build_stock_context(last_msg['content'])
     augmented_content = last_msg['content'] + stock_context + context
 
-    # ── Try Gemini first ─────────────────────────────────────
-    if _genai:
-        def remap_role(role: str) -> str:
-            return 'model' if role == 'assistant' else 'user'
+    raw = _llama_chat(messages, augmented_content)
+    return _format_chat_reply(raw)
 
-        history = []
-        for msg in messages[:-1]:
-            history.append({
-                'role':  remap_role(msg['role']),
-                'parts': [{'text': msg['content']}],
-            })
 
-        # Gemini quota management for chat as well: switch to OpenAI when near exhaustion.
-        try:
-            used_calls = _get_gemini_call_count_today()
-            if used_calls >= GEMINI_NEAR_THRESHOLD or used_calls >= GEMINI_DAILY_LIMIT:
-                return _openai_chat(messages, augmented_content)
-            _increment_gemini_call_count_today()
-        except Exception:
-            pass
+def _format_chat_reply(text: str) -> str:
+    """
+    Normalizes model output for the current chat UI:
+    - removes markdown markers like ** and leading *
+    - keeps clear section headings
+    - uses plain bullet points
+    """
+    if not text:
+        return "TL;DR: I am unable to generate a response right now."
 
-        model = _genai.GenerativeModel(
-            model_name=MODEL_NAME,
-            system_instruction=SYSTEM_PROMPT,
-            generation_config=_genai.types.GenerationConfig(
-                temperature=0.4,
-                max_output_tokens=800,
-            ),
-        )
+    cleaned = text.replace("**", "").strip()
+    lines = [ln.rstrip() for ln in cleaned.splitlines()]
+    out = []
 
-        try:
-            chat_session = model.start_chat(history=history)
-            response = chat_session.send_message(augmented_content)
-            return response.text
-        except Exception as e:
-            print(f'[Gemini Chat] Error: {e} — trying without context')
-            try:
-                chat_session2 = model.start_chat(history=history)
-                response2 = chat_session2.send_message(last_msg['content'])
-                return response2.text
-            except Exception as e2:
-                print(f'[Gemini Chat] Retry failed: {e2} — falling back to OpenAI')
+    heading_aliases = {
+        "tl;dr": "TL;DR",
+        "what i'm seeing": "What I'm seeing",
+        "why it matters": "Why it matters",
+        "levels / signals to watch": "Levels / signals to watch",
+        "next best step": "Next best step",
+    }
 
-    # ── OpenAI fallback ───────────────────────────────────────
-    return _openai_chat(messages, augmented_content)
+    def _to_unicode_bold(s: str) -> str:
+        # Unicode Mathematical Alphanumeric Symbols (bold)
+        out_s = []
+        for ch in s:
+            o = ord(ch)
+            if 0x41 <= o <= 0x5A:  # A-Z
+                out_s.append(chr(0x1D400 + (o - 0x41)))
+            elif 0x61 <= o <= 0x7A:  # a-z
+                out_s.append(chr(0x1D41A + (o - 0x61)))
+            else:
+                out_s.append(ch)
+        return "".join(out_s)
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if out and out[-1] != "":
+                out.append("")
+            continue
+
+        # Remove TL;DR lines completely (user requested no TL;DR)
+        tl = line.lower().replace("**", "").strip()
+        if tl.startswith("tl;dr:") or tl == "tl;dr" or tl == "tl;dr:":
+            continue
+
+        # Normalize markdown list markers
+        if line.startswith("* "):
+            line = f"- {line[2:].strip()}"
+        elif line.startswith("- * "):
+            line = f"- {line[4:].strip()}"
+        elif re.match(r"^\d+\.\s+", line):
+            line = "- " + re.sub(r"^\d+\.\s+", "", line)
+
+        # Normalize heading forms like "- Heading:", "Heading:", "**Heading**:"
+        heading_candidate = re.sub(r"^[-*]\s*", "", line).strip()
+        if ":" in heading_candidate:
+            key = heading_candidate.split(":", 1)[0].strip().lower().replace("’", "'")
+            if key in heading_aliases:
+                rest = heading_candidate.split(":", 1)[1].strip()
+                # Output bold section headings, no markdown list markers needed.
+                out.append(_to_unicode_bold(heading_aliases[key]))
+                if rest:
+                    if rest.startswith("* "):
+                        rest = rest[2:].strip()
+                    out.append(f"- {rest}")
+                continue
+
+        out.append(line)
+
+    # Remove duplicate blank lines
+    final_lines = []
+    for ln in out:
+        if ln == "" and final_lines and final_lines[-1] == "":
+            continue
+        final_lines.append(ln)
+
+    return "\n".join(final_lines).strip()

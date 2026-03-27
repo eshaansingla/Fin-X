@@ -190,6 +190,101 @@ def manual_refresh():
         )
 
 
+@router.post('/signals/backfill-ai')
+def backfill_ai_signals(limit: int = Query(10, ge=1, le=100)):
+    """
+    Maintenance endpoint (dev use):
+    - Re-runs Llama-based explain_signal for existing rule-based signals.
+    - Clears cached cards whose technical_snapshot uses the old fallback text so they regenerate on next view.
+    """
+    try:
+        # 1) Upgrade existing rule-based Opportunity Radar signals
+        stale_signals = db_fetchall(
+            '''
+            SELECT s.*
+            FROM signals s
+            WHERE (s.ai_provider = 'rule_based'
+                   OR s.explanation = 'Signal analysis temporarily unavailable.')
+            ORDER BY s.created_at DESC
+            LIMIT ?
+            ''',
+            (limit,),
+        )
+
+        upgraded = 0
+        for sig in stale_signals:
+            deal_id = sig.get('deal_id')
+            symbol  = sig.get('symbol')
+            if not deal_id or not symbol:
+                continue
+
+            try:
+                deal = db_fetchone('SELECT * FROM bulk_deals WHERE id=?', (deal_id,))
+                if not deal:
+                    continue
+
+                stock = get_stock_data(symbol)
+                if 'error' in stock:
+                    print(f"[Backfill] No price data for {symbol} — skipping")
+                    continue
+
+                ai = explain_signal(deal, stock)
+                db_execute(
+                    '''
+                    UPDATE signals
+                    SET explanation     = ?,
+                        signal_type     = ?,
+                        risk_level      = ?,
+                        confidence      = ?,
+                        key_observation = ?,
+                        disclaimer      = ?,
+                        ai_provider     = ?
+                    WHERE id = ?
+                    ''',
+                    (
+                        ai.get('explanation', sig.get('explanation', '')),
+                        ai.get('signal_type', sig.get('signal_type', 'neutral')),
+                        ai.get('risk_level', sig.get('risk_level', 'medium')),
+                        int(ai.get('confidence', sig.get('confidence', 50)) or 50),
+                        ai.get('key_observation', sig.get('key_observation', '')),
+                        ai.get('disclaimer', sig.get('disclaimer', 'For educational purposes only. Not financial advice.')),
+                        ai.get('ai_provider', 'llama'),
+                        sig['id'],
+                    ),
+                )
+                upgraded += 1
+                time.sleep(1.0)
+            except Exception as e:
+                print(f"[Backfill] Failed to upgrade signal {sig.get('id')}: {e}")
+                continue
+
+        # 2) Clear all cached cards so they regenerate with Llama on next request
+        try:
+            deleted = db_execute(
+                '''
+                DELETE FROM card_cache
+                ''',
+                (),
+            )
+        except Exception as e:
+            print(f"[Backfill] Failed to clear stale card_cache rows: {e}")
+            deleted = 0
+
+        return {
+            'success': True,
+            'data': {
+                'signals_upgraded': upgraded,
+                'stale_cards_cleared': deleted,
+            },
+            'error': None,
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={'success': False, 'data': None, 'error': str(e)},
+        )
+
+
 @router.get('/bulk-deals')
 def get_bulk_deals(limit: int = Query(20, ge=1, le=100)):
     """Returns raw bulk deal data without AI explanation."""

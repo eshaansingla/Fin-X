@@ -11,7 +11,13 @@ from __future__ import annotations
 import re
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import sessionmaker
+try:
+    # SQLAlchemy 2.x
+    from sqlalchemy.orm import DeclarativeBase
+except ImportError:
+    # SQLAlchemy 1.4 fallback
+    from sqlalchemy.ext.declarative import declarative_base
 
 from core.config import settings
 
@@ -35,8 +41,11 @@ engine = create_engine(_url, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-class Base(DeclarativeBase):
-    pass
+if "DeclarativeBase" in globals():
+    class Base(DeclarativeBase):
+        pass
+else:
+    Base = declarative_base()
 
 
 def get_db():
