@@ -7,7 +7,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18.3-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![Gemini](https://img.shields.io/badge/Gemini_2.5_Flash_Lite-AI_Primary-8E75B2?style=for-the-badge&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
+[![Groq](https://img.shields.io/badge/Groq_Llama--3.3--70b--versatile-AI_Primary-8E75B2?style=for-the-badge&logo=groq&logoColor=white)](https://groq.com/)
 [![GPT-4o mini](https://img.shields.io/badge/GPT--4o_mini-AI_Fallback-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com)
 [![Tests](https://img.shields.io/badge/Tests-22_passing-22c55e?style=for-the-badge&logo=pytest&logoColor=white)](#-testing)
 [![Auth](https://img.shields.io/badge/Auth-JWT_+_Google_OAuth-F59E0B?style=for-the-badge&logo=jsonwebtokens&logoColor=black)](https://jwt.io)
@@ -59,7 +59,7 @@ surfacing what it all *means* — in plain language, before the broader market r
 ---
 
 ### NSE Signal Card — Per-Stock Deep Analysis
-> Live price chart across 5 timeframes (1D / 1W / 1M / 5Y / ALL), RSI, EMA-20/50, MACD, Bollinger Bands — with full AI technical snapshot. Search any NSE ticker.
+> Live price chart across 5 timeframes (1D / 1W / 1M / 1Y / 5Y / ALL), RSI, EMA-20/50, MACD, Bollinger Bands — with full AI technical snapshot. Search any NSE ticker.
 
 <img src="screenshots/signal-card-dark.png" width="100%" alt="Signal Card Dark"/>
 
@@ -153,40 +153,40 @@ Real-time price streaming per symbol via WebSocket (`/market/ws/{symbol}`). Mark
 ║                           FIN-X                                  ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║                                                                  ║
-║   ┌──────────────────  REACT 18 FRONTEND  ──────────────────┐   ║
-║   │                                                          │   ║
-║   │  ┌──────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐  │   ║
-║   │  │  Radar   │  │  Signal  │  │  Chat   │  │FinPulse │   │   ║
-║   │  │   Page   │  │  Cards   │  │   AI    │  │  Page   │  │   ║
-║   │  └────┬─────┘  └────┬─────┘  └────┬────┘  └────┬────┘  │   ║
-║   │       └─────────────┴─────────────┴─────────────┘       │   ║
-║   │             Axios + JWT Bearer + Silent Refresh           │   ║
-║   │             AuthContext · ThemeContext (dark/light)       │   ║
-║   └────────────────────────┬─────────────────────────────────┘   ║
+║   ┌──────────────────  REACT 18 FRONTEND  ──────────────────┐    ║
+║   │                                                         │    ║
+║   │  ┌──────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐   │    ║
+║   │  │  Radar   │  │  Signal  │  │  Chat   │  │FinPulse │   │    ║
+║   │  │   Page   │  │  Cards   │  │   AI    │  │  Page   │   │    ║
+║   │  └────┬─────┘  └────┬─────┘  └────┬────┘  └────┬────┘   │    ║
+║   │       └─────────────┴─────────────┴─────────────┘       │    ║
+║   │             Axios + JWT Bearer + Silent Refresh         │    ║
+║   │             AuthContext · ThemeContext (dark/light)     │    ║
+║   └────────────────────────┬────────────────────────────────┘    ║
 ║                            │ HTTP / WebSocket                    ║
 ║   ┌────────────────────────┴─────────────────────────────────┐   ║
-║   │                   FASTAPI BACKEND                         │   ║
-║   │                                                           │   ║
-║   │  /api/v2/auth/*   ──  JWT + Google OAuth 2.0              │   ║
-║   │  /api/signals     ──  NSE Radar Engine                    │   ║
-║   │  /api/card/*      ──  AI Signal Card Generator            │   ║
-║   │  /api/chat        ──  Grounded Market Chat                │   ║
-║   │  /api/market/*    ──  Live Prices + WebSocket Feed        │   ║
-║   │  /api/finpulse    ──  News Intelligence                   │   ║
-║   │                                                           │   ║
+║   │                   FASTAPI BACKEND                        │   ║
+║   │                                                          │   ║
+║   │  /api/v2/auth/*   ──  JWT + Google OAuth 2.0             │   ║
+║   │  /api/signals     ──  NSE Radar Engine                   │   ║
+║   │  /api/card/*      ──  AI Signal Card Generator           │   ║
+║   │  /api/chat        ──  Grounded Market Chat               │   ║
+║   │  /api/market/*    ──  Live Prices + WebSocket Feed       │   ║
+║   │  /api/finpulse    ──  News Intelligence                  │   ║
+║   │                                                          │   ║
 ║   │  ┌────────────────────────────────────────────────────┐  │   ║
-║   │  │                3-TIER AI STACK                      │  │   ║
-║   │  │                                                     │  │   ║
-║   │  │  Tier 1  Gemini 2.5 Flash Lite  ←  Primary         │  │   ║
-║   │  │             ↓ (on quota / error)                    │  │   ║
-║   │  │  Tier 2  GPT-4o mini            ←  Fallback         │  │   ║
-║   │  │             ↓ (on quota / error)                    │  │   ║
-║   │  │  Tier 3  Rule Engine            ←  Always-on        │  │   ║
+║   │  │                3-TIER AI STACK                     │  │   ║
+║   │  │                                                    │  │   ║
+║   │  │  Tier 1  Groq Llama-3.3-70b-versatile  ←  Primary  │  │   ║
+║   │  │             ↓ (on quota / error)                   │  │   ║
+║   │  │  Tier 2  GPT-4o mini            ←  Fallback        │  │   ║
+║   │  │             ↓ (on quota / error)                   │  │   ║
+║   │  │  Tier 3  Rule Engine            ←  Always-on       │  │   ║
 ║   │  └────────────────────────────────────────────────────┘  │   ║
-║   │                                                           │   ║
-║   │  APScheduler: hourly radar · 2s live quotes · 3s movers   │   ║
-║   │  SQLite (dev) → PostgreSQL (prod) via SQLAlchemy          │   ║
-║   └───────────────────────────────────────────────────────────┘   ║
+║   │                                                          │   ║
+║   │  APScheduler: hourly radar · 2s live quotes · 3s movers  │   ║
+║   │  SQLite (dev) → PostgreSQL (prod) via SQLAlchemy         │   ║
+║   └──────────────────────────────────────────────────────────┘   ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
 
@@ -198,11 +198,11 @@ Real-time price streaming per symbol via WebSocket (`/market/ws/{symbol}`). Mark
             ▼
   ┌──────────────────┐     ┌─────────────────────┐     ┌──────────────────┐
   │   NSE Scraper    │────▶│   3-Tier AI Stack   │────▶│  Signal Store    │
-  │  (hourly cron)   │     │  Gemini → GPT-4o mini│     │  SQLite / PG     │
+  │  (hourly cron)   │     │  Groq → GPT-4o mini │     │  SQLite / PG     │
   └──────────────────┘     │   → Rule fallback   │     └────────┬─────────┘
                            └─────────────────────┘              │
-                                                                 ▼
-                                              ┌──────────────────────────────┐
+                                                                ▼
+                                              ┌──────────────────────────────-┐
                                               │       API Response Layer      │
                                               │                               │
                                               │  Signal explanation           │
@@ -227,14 +227,14 @@ Real-time price streaming per symbol via WebSocket (`/market/ws/{symbol}`). Mark
   EMAIL SIGNUP                              GOOGLE OAUTH 2.0
   ─────────────                             ────────────────
 
-  POST /signup                              GET /google/login
+  POST /signup                           GET /google/login
     │  bcrypt hash (12 rounds)                │  redirect → Google consent
     │  Brevo verification email               │
     ▼                                         ▼
   GET /verify-email?token=               GET /google/callback
     │  mark is_verified = true               │  fetch email + name
     │  redirect → frontend                   │  upsert user record
-    ▼                                         ▼
+    ▼                                        ▼
   POST /login                            issue JWT pair
     │  validate credentials                   │
     │  check is_verified                      │
@@ -262,7 +262,7 @@ Real-time price streaming per symbol via WebSocket (`/market/ws/{symbol}`). Mark
 | **Frontend** | React 18, Tailwind CSS, Vite, Recharts | SPA, code-split builds, dark/light theme |
 | **Backend** | FastAPI, Uvicorn, APScheduler | Async API, hourly scheduling, WebSockets |
 | **Database** | SQLite → PostgreSQL via SQLAlchemy | Auto-switch via `DATABASE_URL` |
-| **AI — Primary** | Gemini 2.5 Flash Lite | Market analysis, chat grounding |
+| **AI — Primary** | Groq Llama-3.3-70b-versatile | Market analysis, chat grounding |
 | **AI — Fallback** | GPT-4o mini | Quota resilience, zero downtime |
 | **AI — Hard fallback** | Custom rule engine | Always-on, no API dependency |
 | **Auth** | JWT (python-jose), bcrypt, Google OAuth 2.0 | Authlib, silent token rotation |
@@ -301,25 +301,47 @@ cp .env.example .env
 **`.env` reference:**
 
 ```env
-GEMINI_API_KEY=...
-OPENAI_API_KEY=...
-NEWS_API_KEY=...
+# ── FIN-X AI Settings ─────────────────────────────────────────────────────────
+# Primary: Groq — fast, free tier, Llama-3.3-70B
+# Get your key at https://console.groq.com/
+GROQ_API_KEY=your-groq-api-key-starting-with-gsk_
+# Groq is auto-detected when key starts with "gsk_"
+# LLAMA_BASE_URL and LLAMA_MODEL are set automatically for Groq keys.
+# Override only if using a different provider:
+LLAMA_API_KEY=
+LLAMA_BASE_URL=https://api.groq.com/openai/v1
+LLAMA_MODEL=llama-3.3-70b-versatile
+NEWS_API_KEY=your-newsapi-key
+OPENAI_API_KEY=your-openai-api-key
+DATABASE_URL=data/finx.db
+CORS_ORIGINS=http://localhost:5173
+RADAR_INTERVAL_HOURS=1
 
-# python -c "import secrets; print(secrets.token_hex(32))"
-JWT_SECRET_KEY=...
+# ── Auth v2 — JWT ─────────────────────────────────────────────────────────────
+# Generate a strong random key: python -c "import secrets; print(secrets.token_hex(32))"
+JWT_SECRET_KEY=replace-with-a-random-secret-at-least-32-chars
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+REFRESH_TOKEN_EXPIRE_DAYS=14
 
-SMTP_HOST=smtp-relay.brevo.com
-SMTP_PORT=587
-SMTP_USER=your-brevo-login
-SMTP_PASS=your-brevo-key
-SMTP_FROM=verified@yourdomain.com
-
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-
+# ── Auth v2 — App URLs ────────────────────────────────────────────────────────
 APP_URL=http://localhost:5173
 BACKEND_URL=http://localhost:8000
-CORS_ORIGINS=http://localhost:5173
+
+# ── Auth v2 — SMTP (email verification) ──────────────────────────────────────
+# Gmail: create an App Password at Google Account > Security > 2-Step Verification > App passwords
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your.address@gmail.com
+SMTP_PASS=your-16-char-app-password
+
+# ── Auth v2 — Google OAuth (optional) ────────────────────────────────────────
+# Create credentials at console.cloud.google.com > APIs & Services > Credentials
+# Authorised redirect URI (dev): http://localhost:5173/api/v2/auth/google/callback
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=http://localhost:5173/api/v2/auth/google/callback
+
 ```
 
 ```bash
