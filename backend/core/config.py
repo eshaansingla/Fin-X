@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""   # Verified sender email shown in From header
 
     # ── URLs ─────────────────────────────────────────────────
-    APP_URL: str = "http://localhost:5173"      # frontend
+    APP_URL: str = os.getenv("APP_URL", "http://localhost:5173")      # frontend
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")  # this server
 
     # ── Google OAuth ─────────────────────────────────────────
