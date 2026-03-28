@@ -238,7 +238,7 @@ async def market_ws(symbol: str, websocket: WebSocket):
 def get_chart(symbol: str, period: str = "1m"):
     """
     Historical chart endpoint for fast graph loading.
-    Supported periods: 1d, 1w, 1m, 5y, max
+    Supported periods: 1d, 1w, 1m, 1y, 5y, max
     """
     try:
         from services.symbol_resolver import normalize_symbol
@@ -253,7 +253,7 @@ def get_chart(symbol: str, period: str = "1m"):
             )
 
         p = (period or "1m").strip().lower()
-        allowed = {"1d", "1w", "1m", "5y", "max"}
+        allowed = {"1d", "1w", "1m", "1y", "5y", "max"}
         if p not in allowed:
             return JSONResponse(
                 status_code=400,

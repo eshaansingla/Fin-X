@@ -599,7 +599,7 @@ def get_bulk_quotes(symbols: list) -> dict:
 def get_historical(symbol: str, period: str = "1m") -> list:
     """
     Get historical price data for charting.
-    period: '1d', '1w', '1m', '5y', 'max'
+    period: '1d', '1w', '1m', '1y', '5y', 'max'
     Returns: [{'time': str, 'price': float}, ...]
     Never raises — returns [] on failure.
     """
@@ -636,7 +636,7 @@ def get_historical(symbol: str, period: str = "1m") -> list:
     _, interval = _period_map.get(period, ("1mo", "1d"))
 
     # Use direct Yahoo Finance chart API (avoids yfinance Brotli issues)
-    _range_map = {"1d": "1d", "1w": "5d", "1m": "1mo", "5y": "5y", "max": "max"}
+    _range_map = {"1d": "1d", "1w": "5d", "1m": "1mo", "1y": "1y", "5y": "5y", "max": "max"}
     yf_range = _range_map.get(period, "1mo")
 
     def _parse_hist(resp_data, sym, prd):

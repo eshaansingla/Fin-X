@@ -21,6 +21,23 @@ const WELCOME = {
   content: "Hi! I'm your Fin-X AI Market Assistant. I have access to live NSE data, today's bulk deals, and recent market headlines.\n\nAsk me anything about Indian stocks and markets!"
 }
 
+const CHAT_STORAGE_KEY = 'finx_market_chat_history'
+
+function readStoredChat() {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    const messages = Array.isArray(parsed) ? parsed : parsed.messages
+    const sessionId = Array.isArray(parsed) ? null : (parsed.sessionId ?? null)
+    if (!Array.isArray(messages)) return null
+    if (!messages.every(m => m && typeof m.role === 'string' && typeof m.content === 'string')) return null
+    return { messages, sessionId }
+  } catch {
+    return null
+  }
+}
+
 function Msg({ role, content }) {
   const isUser = role === 'user'
   return (
@@ -75,12 +92,22 @@ function Typing() {
 }
 
 export default function ChatInterface() {
-  const [msgs, setMsgs] = useState([WELCOME])
+  const initRef = useRef(null)
+  if (initRef.current === null) {
+    initRef.current = readStoredChat()
+  }
+  const [msgs, setMsgs] = useState(() => initRef.current?.messages ?? [WELCOME])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sessionId, setSession] = useState(null)
+  const [sessionId, setSession] = useState(() => initRef.current?.sessionId ?? null)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({ messages: msgs, sessionId }))
+    } catch { /* ignore quota / private mode */ }
+  }, [msgs, sessionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -106,6 +133,7 @@ export default function ChatInterface() {
 
   const handleClear = async () => {
     if (sessionId) await clearChat(sessionId).catch(() => { })
+    try { localStorage.removeItem(CHAT_STORAGE_KEY) } catch { /* ignore */ }
     setMsgs([WELCOME])
     setSession(null)
   }

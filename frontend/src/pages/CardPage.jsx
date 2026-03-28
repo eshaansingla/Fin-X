@@ -10,8 +10,8 @@ const POPULAR = [
   'WIPRO', 'BAJFINANCE', 'SUNPHARMA', 'ITC',
 ]
 
-const TREND_KEYS  = { '1D': '1d', '1W': '1w', '1M': '1m', '5Y': '5y', 'ALL': 'max' }
-const TREND_LABEL = { '1D': 'Intraday', '1W': '5 Days', '1M': '30 Days', '5Y': '5 Years', 'ALL': 'All Time' }
+const TREND_KEYS  = { '1D': '1d', '1W': '1w', '1M': '1m', '1Y': '1y', '5Y': '5y', 'ALL': 'max' }
+const TREND_LABEL = { '1D': 'Intraday', '1W': '5 Days', '1M': '30 Days', '1Y': '1 Year', '5Y': '5 Years', 'ALL': 'All Time' }
 
 // ── Module-level card cache (survives re-renders, resets on hard reload) ──
 // Keyed by symbol. TTL 5 min — ensures returning to a stock is instant.
@@ -123,7 +123,7 @@ function TrendChart({ symbol, trends, liveIntraday, marketOpen }) {
           )}
         </div>
         <div className="flex gap-0.5 bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 border border-gray-200 dark:border-gray-700">
-          {['1D', '1W', '1M', '5Y', 'ALL'].map(t => (
+          {['1D', '1W', '1M', '1Y', '5Y', 'ALL'].map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
