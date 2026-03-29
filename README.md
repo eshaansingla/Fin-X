@@ -40,7 +40,7 @@ surfacing what it all <strong>means</strong>, in plain language, before the broa
 ## 📸 Screenshots
 
 ### Landing Page & Auth
-> Production-grade dark UI with Google OAuth 2.0 and email/password login. Real stats: 500+ NSE stocks, 3-tier AI fallback, <50 ms price latency, live WebSocket feed.
+> Production-grade dark UI with Google OAuth 2.0 and email/password login. Real stats: Nearly all of the NSE stocks, 3-tier AI fallback, <50 ms price latency, live WebSocket feed.
 
 <img src="https://github.com/user-attachments/assets/e658ee95-a6d0-4f81-b7c5-b024d6c95342" width="100%" alt="Landing Page"/>
 
